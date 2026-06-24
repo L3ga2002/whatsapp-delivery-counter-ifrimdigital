@@ -410,38 +410,6 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleSaveUpdateToken = async (token: string): Promise<void> => {
-    if (!desktopApi || isBusy) {
-      return;
-    }
-    setIsBusy(true);
-    try {
-      const status = await desktopApi.saveUpdateToken(token);
-      setUpdateStatus(status);
-      setNotice({ kind: 'success', text: 'Tokenul pentru update privat a fost salvat local.' });
-    } catch (error) {
-      setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut salva tokenul de update.') });
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const handleClearUpdateToken = async (): Promise<void> => {
-    if (!desktopApi || isBusy) {
-      return;
-    }
-    setIsBusy(true);
-    try {
-      const status = await desktopApi.clearUpdateToken();
-      setUpdateStatus(status);
-      setNotice({ kind: 'success', text: 'Tokenul de update a fost sters.' });
-    } catch (error) {
-      setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge tokenul de update.') });
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
   const handleCheckForUpdates = async (): Promise<void> => {
     if (!desktopApi || isBusy) {
       return;
@@ -653,8 +621,6 @@ export default function App(): JSX.Element {
             onBackupWorkspace={handleBackupWorkspace}
             onRestoreWorkspace={handleRestoreWorkspace}
             onSaveSettings={handleSaveSettings}
-            onSaveUpdateToken={handleSaveUpdateToken}
-            onClearUpdateToken={handleClearUpdateToken}
             onCheckForUpdates={handleCheckForUpdates}
             onDownloadUpdate={handleDownloadUpdate}
             onInstallUpdate={handleInstallUpdate}
@@ -1270,8 +1236,6 @@ function SettingsView({
   onBackupWorkspace,
   onRestoreWorkspace,
   onSaveSettings,
-  onSaveUpdateToken,
-  onClearUpdateToken,
   onCheckForUpdates,
   onDownloadUpdate,
   onInstallUpdate,
@@ -1284,8 +1248,6 @@ function SettingsView({
   onBackupWorkspace: () => Promise<void>;
   onRestoreWorkspace: () => Promise<void>;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
-  onSaveUpdateToken: (token: string) => Promise<void>;
-  onClearUpdateToken: () => Promise<void>;
   onCheckForUpdates: () => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
@@ -1294,7 +1256,6 @@ function SettingsView({
   isBusy: boolean;
 }): JSX.Element {
   const [retentionDays, setRetentionDays] = useState(String(workspace.settings.importRetentionDays));
-  const [updateTokenDraft, setUpdateTokenDraft] = useState('');
   const parsedRetentionDays = Number.parseInt(retentionDays, 10);
   const safeRetentionDays = Number.isFinite(parsedRetentionDays)
     ? Math.min(365, Math.max(1, parsedRetentionDays))
@@ -1327,12 +1288,12 @@ function SettingsView({
           <RefreshCw aria-hidden="true" />
           <div>
             <h2>Actualizari aplicatie</h2>
-            <p>Update privat prin GitHub Releases. Tokenul se salveaza local criptat si nu intra in backup.</p>
+            <p>Update automat prin canal public de release. Clientul nu trebuie sa introduca token sau cont GitHub.</p>
           </div>
         </div>
         <div className="settings-grid">
           <Metric label="Versiune curenta" value={updateStatus?.currentVersion ?? '-'} />
-          <Metric label="Token update" value={updateStatus?.tokenConfigured ? 'configurat' : 'neconfigurat'} />
+          <Metric label="Canal update" value="public" />
           <Metric label="Status update" value={formatUpdateState(updateStatus)} />
         </div>
         {updateStatus?.message ? <div className={`notice ${updateStatus.state === 'error' ? 'error' : 'info'}`}>{updateStatus.message}</div> : null}
@@ -1341,36 +1302,6 @@ function SettingsView({
             <span style={{ width: `${Math.min(100, Math.max(0, updateStatus.progressPercent))}%` }} />
           </div>
         ) : null}
-        <div className="form-grid two-columns">
-          <label>
-            GitHub token pentru update privat
-            <input
-              type="password"
-              value={updateTokenDraft}
-              onChange={(event) => setUpdateTokenDraft(event.target.value)}
-              placeholder={updateStatus?.tokenConfigured ? 'Token deja configurat' : 'ghp_...'}
-              disabled={isBusy}
-            />
-          </label>
-          <div className="button-row stacked-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => {
-                void onSaveUpdateToken(updateTokenDraft);
-                setUpdateTokenDraft('');
-              }}
-              disabled={isBusy || !updateTokenDraft.trim()}
-            >
-              <CheckCircle2 aria-hidden="true" />
-              <span>Salveaza token</span>
-            </button>
-            <button className="danger-button" type="button" onClick={() => void onClearUpdateToken()} disabled={isBusy || !updateStatus?.tokenConfigured}>
-              <Trash2 aria-hidden="true" />
-              <span>Sterge token</span>
-            </button>
-          </div>
-        </div>
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => void onCheckForUpdates()} disabled={isBusy}>
             <RefreshCw aria-hidden="true" />
@@ -3305,7 +3236,6 @@ function formatUpdateState(status: AppUpdateStatus | null): string {
   if (!status) return '-';
   const labels: Record<AppUpdateStatus['state'], string> = {
     idle: 'in asteptare',
-    'not-configured': 'token lipsa',
     checking: 'verific',
     'not-available': 'la zi',
     available: 'disponibil',

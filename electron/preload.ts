@@ -47,9 +47,6 @@ const api: DeliveryCounterApi = {
   getAliases: (): Promise<AliasMap> => ipcRenderer.invoke('aliases:get'),
   saveAliases: (aliases: AliasMap): Promise<AliasMap> => ipcRenderer.invoke('aliases:save', aliases),
   getUpdateStatus: (): Promise<AppUpdateStatus> => ipcRenderer.invoke('updates:getStatus'),
-  saveUpdateToken: (token: string): Promise<AppUpdateStatus> =>
-    ipcRenderer.invoke('updates:saveToken', token),
-  clearUpdateToken: (): Promise<AppUpdateStatus> => ipcRenderer.invoke('updates:clearToken'),
   checkForUpdates: (): Promise<AppUpdateStatus> => ipcRenderer.invoke('updates:check'),
   downloadUpdate: (): Promise<AppUpdateStatus> => ipcRenderer.invoke('updates:download'),
   installUpdate: (): Promise<void> => ipcRenderer.invoke('updates:install'),

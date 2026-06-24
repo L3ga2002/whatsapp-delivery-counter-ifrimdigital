@@ -34,16 +34,16 @@ Preferred stack:
 - Excel export with multiple report scopes
 - Windows packaging with electron-builder
 
-## Private Auto-Update
+## Public Auto-Update Channel
 
-The app supports private GitHub Releases updates. The GitHub token is not bundled in the `.exe` and is not stored in the workspace backup.
+The source repository can stay private. Installed clients update from a separate public GitHub Releases repository that contains only release artifacts, not source code.
 
 Client setup:
 
 1. Install the current `.exe`.
 2. Open `Setari`.
-3. Paste a read-only GitHub token for the private release repository.
-4. Use `Verifica update`, `Descarca update`, then `Instaleaza si reporneste`.
+3. Use `Verifica update`, `Descarca update`, then `Instaleaza si reporneste`.
+4. No GitHub account or token is required on the client computer.
 
 Release build:
 

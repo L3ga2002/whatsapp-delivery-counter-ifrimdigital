@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-delivery-counter-ifrimdigital",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "author": "IfrimDigital",
   "description": "Windows desktop app for counting courier activity from exported WhatsApp chats.",
@@ -64,8 +64,8 @@
       {
         "provider": "github",
         "owner": "L3ga2002",
-        "repo": "whatsapp-delivery-counter-ifrimdigital",
-        "private": true,
+        "repo": "whatsapp-delivery-counter-ifrimdigital-releases",
+        "private": false,
         "releaseType": "release"
       }
     ],

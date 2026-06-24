@@ -160,8 +160,6 @@ export interface DeliveryCounterApi {
   getAliases: () => Promise<AliasMap>;
   saveAliases: (aliases: AliasMap) => Promise<AliasMap>;
   getUpdateStatus: () => Promise<AppUpdateStatus>;
-  saveUpdateToken: (token: string) => Promise<AppUpdateStatus>;
-  clearUpdateToken: () => Promise<AppUpdateStatus>;
   checkForUpdates: () => Promise<AppUpdateStatus>;
   downloadUpdate: () => Promise<AppUpdateStatus>;
   installUpdate: () => Promise<void>;
@@ -170,7 +168,6 @@ export interface DeliveryCounterApi {
 
 export type AppUpdateState =
   | 'idle'
-  | 'not-configured'
   | 'checking'
   | 'not-available'
   | 'available'
@@ -181,7 +178,6 @@ export type AppUpdateState =
 export interface AppUpdateStatus {
   currentVersion: string;
   state: AppUpdateState;
-  tokenConfigured: boolean;
   isPackaged: boolean;
   availableVersion?: string;
   progressPercent?: number;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,9 +34,8 @@ let workspaceStore: WorkspaceStore | null = null;
 let updateStatus: AppUpdateStatus = createUpdateStatus('idle');
 
 const aliasFileName = 'courier-aliases.json';
-const updateTokenFileName = 'github-update-token.bin';
 const updateOwner = 'L3ga2002';
-const updateRepo = 'whatsapp-delivery-counter-ifrimdigital';
+const updateRepo = 'whatsapp-delivery-counter-ifrimdigital-releases';
 const trustedDevServerOrigin = 'http://127.0.0.1:3001';
 const maxImportFileCount = 30;
 const maxTxtFileBytes = 20 * 1024 * 1024;
@@ -178,26 +177,12 @@ function registerIpcHandlers(): void {
 
   handleTrusted('updates:getStatus', async (): Promise<AppUpdateStatus> => refreshUpdateStatus());
 
-  handleTrusted('updates:saveToken', async (_event, token: string): Promise<AppUpdateStatus> => {
-    await saveUpdateToken(token);
-    return setUpdateStatus('idle', 'Tokenul de update a fost salvat local.', { tokenConfigured: true });
-  });
-
-  handleTrusted('updates:clearToken', async (): Promise<AppUpdateStatus> => {
-    await deleteUpdateToken();
-    return setUpdateStatus('not-configured', 'Tokenul de update a fost sters.', { tokenConfigured: false });
-  });
-
   handleTrusted('updates:check', async (): Promise<AppUpdateStatus> => {
-    const token = await readUpdateToken();
-    if (!token) {
-      return setUpdateStatus('not-configured', 'Configureaza tokenul GitHub pentru update privat.');
-    }
     if (!app.isPackaged) {
       return setUpdateStatus('idle', 'Update-ul automat functioneaza doar in aplicatia instalata.');
     }
 
-    configureUpdaterFeed(token);
+    configureUpdaterFeed();
     setUpdateStatus('checking', 'Verific update-uri...');
     const result = await autoUpdater.checkForUpdates();
     return result?.updateInfo
@@ -206,15 +191,11 @@ function registerIpcHandlers(): void {
   });
 
   handleTrusted('updates:download', async (): Promise<AppUpdateStatus> => {
-    const token = await readUpdateToken();
-    if (!token) {
-      return setUpdateStatus('not-configured', 'Configureaza tokenul GitHub pentru update privat.');
-    }
     if (!app.isPackaged) {
       return setUpdateStatus('idle', 'Download-ul de update functioneaza doar in aplicatia instalata.');
     }
 
-    configureUpdaterFeed(token);
+    configureUpdaterFeed();
     setUpdateStatus('downloading', 'Descarc update-ul...');
     await autoUpdater.downloadUpdate();
     return refreshUpdateStatus();
@@ -577,10 +558,6 @@ function aliasFilePath(): string {
   return path.join(app.getPath('userData'), aliasFileName);
 }
 
-function updateTokenPath(): string {
-  return path.join(app.getPath('userData'), updateTokenFileName);
-}
-
 function configureUpdaterEvents(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -614,68 +591,24 @@ function configureUpdaterEvents(): void {
   });
 }
 
-function configureUpdaterFeed(token: string): void {
+function configureUpdaterFeed(): void {
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: updateOwner,
     repo: updateRepo,
-    private: true,
-    token,
+    private: false,
     releaseType: 'release',
   });
 }
 
-async function saveUpdateToken(token: string): Promise<void> {
-  const cleanToken = token.trim();
-  if (!cleanToken) {
-    throw new Error('Tokenul GitHub este obligatoriu pentru update privat.');
-  }
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('Criptarea locala nu este disponibila pe acest sistem.');
-  }
-  const encrypted = safeStorage.encryptString(cleanToken);
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  await fs.writeFile(updateTokenPath(), encrypted);
-}
-
-async function readUpdateToken(): Promise<string | null> {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      return null;
-    }
-    const encrypted = await fs.readFile(updateTokenPath());
-    return safeStorage.decryptString(encrypted).trim() || null;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') {
-      console.warn('[updates] Could not read stored update token.', sanitizeUpdateError(error));
-    }
-    return null;
-  }
-}
-
-async function deleteUpdateToken(): Promise<void> {
-  try {
-    await fs.unlink(updateTokenPath());
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') {
-      throw error;
-    }
-  }
-}
-
 async function refreshUpdateStatus(): Promise<AppUpdateStatus> {
-  return setUpdateStatus(updateStatus.state, updateStatus.message, {
-    tokenConfigured: Boolean(await readUpdateToken()),
-  });
+  return setUpdateStatus(updateStatus.state, updateStatus.message);
 }
 
 function createUpdateStatus(state: AppUpdateState, message?: string): AppUpdateStatus {
   return {
     currentVersion: app.getVersion(),
     state,
-    tokenConfigured: false,
     isPackaged: app.isPackaged,
     message,
   };
