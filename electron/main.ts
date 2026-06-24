@@ -562,6 +562,7 @@ function configureUpdaterEvents(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
+  (autoUpdater as typeof autoUpdater & { verifyUpdateCodeSignature: boolean }).verifyUpdateCodeSignature = false;
   autoUpdater.logger = null;
 
   autoUpdater.on('checking-for-update', () => {
