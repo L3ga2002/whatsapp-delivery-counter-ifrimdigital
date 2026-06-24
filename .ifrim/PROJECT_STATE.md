@@ -45,6 +45,7 @@
 - 2026-06-24: Switched auto-update plan to client-friendly public release channel in `0.3.6`. Source repo remains private, while installed clients check a separate public GitHub Releases repo containing only installer/update artifacts. Removed token storage/UI from Settings, updated electron-builder publish target, and lightly polished the UI with a more professional gray/charcoal base plus controlled IfrimDigital green/orange accents.
 - 2026-06-24: Prepared `0.3.7` as the real auto-update test release over installed `0.3.6`. UI theme now uses orange as the primary professional accent, with charcoal/gray structure and IfrimDigital green kept as a secondary brand signal.
 - 2026-06-24: Discovered unsigned Windows auto-update blocker: installed `0.3.6` rejects unsigned `0.3.7` because Electron updater validates code signatures when a publisher is configured. Prepared `0.3.8` as the unsigned-update bridge build: disabled updater code-signature verification and removed `publisherName` from electron-builder config. This build must be installed manually once; future unsigned updates can then be tested from Settings.
+- 2026-06-24: Prepared `0.3.9` as the visual polish and auto-update test release after the `0.3.8` bridge. Refined the desktop theme into a warmer professional orange/charcoal palette, with a more visible IfrimDigital badge and improved contrast across dashboard cards, report sections, buttons, tabs, and daily tables.
 
 ## Product Direction
 
