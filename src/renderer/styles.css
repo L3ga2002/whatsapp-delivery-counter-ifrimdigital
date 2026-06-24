@@ -1,11 +1,15 @@
 :root {
   color: #1f2933;
-  background: #edf1f4;
-  --brand: #0c7b63;
-  --brand-dark: #173449;
-  --accent: #e8792e;
+  background: #f1f2f3;
+  --brand: #e8792e;
+  --brand-dark: #20262d;
+  --accent: #0c7b63;
+  --accent-orange: #e8792e;
+  --accent-orange-dark: #bd551b;
+  --accent-orange-soft: #fff3e8;
+  --accent-green: #0c7b63;
   --surface: #ffffff;
-  --line: #d9e1e7;
+  --line: #ded8d1;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
@@ -30,7 +34,7 @@ select {
 input[type="checkbox"] {
   width: 18px;
   min-height: 18px;
-  accent-color: var(--brand);
+  accent-color: var(--accent-orange);
 }
 
 button {
@@ -43,8 +47,8 @@ button {
   min-height: 100vh;
   padding-top: 36px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(237, 241, 244, 0) 260px),
-    #edf1f4;
+    linear-gradient(180deg, rgba(255, 246, 236, 0.82), rgba(241, 242, 243, 0) 280px),
+    #f1f2f3;
 }
 
 .loading-app {
@@ -52,7 +56,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: #173449;
+  color: var(--brand-dark);
   font-weight: 750;
 }
 
@@ -62,9 +66,11 @@ button {
   height: calc(100vh - 36px);
   padding: 20px 16px;
   border-right: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, #102b3e 0%, #0c2333 58%, #081a27 100%);
+  background:
+    linear-gradient(180deg, rgba(232, 121, 46, 0.18), rgba(232, 121, 46, 0) 190px),
+    linear-gradient(180deg, #252b33 0%, #18212a 58%, #101820 100%);
   color: #ffffff;
-  box-shadow: 12px 0 32px rgba(23, 52, 73, 0.12);
+  box-shadow: 12px 0 32px rgba(32, 38, 45, 0.16);
 }
 
 .brand-block {
@@ -77,12 +83,12 @@ button {
   width: fit-content;
   padding: 7px 12px;
   border-radius: 8px;
-  color: #082519;
-  background: linear-gradient(135deg, #90ead2, #f5a15a);
+  color: #241109;
+  background: linear-gradient(135deg, #ffb36c, #e8792e 62%, #90ead2);
   font-size: 1rem;
   font-weight: 900;
   text-transform: uppercase;
-  box-shadow: 0 8px 18px rgba(232, 121, 46, 0.18);
+  box-shadow: 0 10px 22px rgba(232, 121, 46, 0.26);
 }
 
 .brand-block strong {
@@ -117,8 +123,8 @@ button {
 
 .nav-button.active {
   color: #ffffff;
-  border-left-color: var(--accent);
-  background: rgba(255, 255, 255, 0.15);
+  border-left-color: var(--accent-orange);
+  background: rgba(232, 121, 46, 0.18);
 }
 
 .workspace-main {
@@ -139,12 +145,12 @@ button {
   margin-bottom: 8px;
   padding: 7px 12px;
   border-radius: 8px;
-  color: #082519;
-  background: linear-gradient(135deg, #91e9d4, #f6a45f);
+  color: #241109;
+  background: linear-gradient(135deg, #ffb36c, #e8792e 64%, #90ead2);
   font-size: 0.9rem;
   font-weight: 900;
   letter-spacing: 0;
-  box-shadow: 0 8px 20px rgba(232, 121, 46, 0.16);
+  box-shadow: 0 10px 22px rgba(232, 121, 46, 0.24);
 }
 
 .view-stack {
@@ -201,14 +207,14 @@ button {
 
 .step-badge.active {
   border-color: var(--brand);
-  color: #12372f;
-  background: #eef8f4;
-  box-shadow: inset 4px 0 0 var(--accent);
+  color: #4c210d;
+  background: var(--accent-orange-soft);
+  box-shadow: inset 4px 0 0 var(--accent-orange);
 }
 
 .step-badge.complete span {
   color: #ffffff;
-  background: #0c7b63;
+  background: var(--accent-orange);
 }
 
 .form-grid,
@@ -282,7 +288,7 @@ button {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--brand), var(--accent));
+  background: linear-gradient(90deg, var(--accent-orange), #f7a65b);
   transition: width 160ms ease;
 }
 
@@ -312,7 +318,7 @@ button {
   border-radius: 999px;
   color: #ffffff;
   background: var(--brand-dark);
-  box-shadow: inset 0 -3px 0 rgba(232, 121, 46, 0.8);
+  box-shadow: inset 0 -3px 0 var(--accent-orange);
 }
 
 .quick-guide span {
@@ -350,8 +356,8 @@ button {
 }
 
 .entity-button.active {
-  outline: 3px solid rgba(12, 123, 99, 0.18);
-  background: #eef8f4;
+  outline: 3px solid rgba(232, 121, 46, 0.18);
+  background: var(--accent-orange-soft);
 }
 
 .entity-row span,
@@ -362,7 +368,7 @@ button {
 
 .entity-row small,
 .entity-button small {
-  color: #0c7b63;
+  color: var(--accent-orange-dark);
   font-weight: 750;
 }
 
@@ -373,8 +379,8 @@ button {
   margin-bottom: 12px;
   padding: 12px;
   border-radius: 8px;
-  background: #f1f7f5;
-  color: #173449;
+  background: #fff6ec;
+  color: var(--brand-dark);
 }
 
 .selected-interval-card span,
@@ -399,7 +405,7 @@ button {
   min-height: 42px;
   border: 1px solid #d8e1e8;
   border-radius: 8px;
-  color: #173449;
+  color: var(--brand-dark);
   background: #f8fafb;
   cursor: pointer;
   font-weight: 760;
@@ -407,9 +413,9 @@ button {
 
 .segmented-actions button.active,
 .result-tabs button.active {
-  border-color: #0c7b63;
-  color: #0f513e;
-  background: #eef8f4;
+  border-color: var(--accent-orange);
+  color: #4c210d;
+  background: var(--accent-orange-soft);
 }
 
 .quick-export-grid {
@@ -518,15 +524,15 @@ h2 {
 .primary-button {
   padding: 0 18px;
   color: #ffffff;
-  background: linear-gradient(135deg, #0c7b63, #0a6a56);
-  box-shadow: 0 10px 24px rgba(12, 123, 99, 0.2);
+  background: linear-gradient(135deg, #f08b3c, var(--accent-orange-dark));
+  box-shadow: 0 12px 26px rgba(232, 121, 46, 0.26);
   font-weight: 750;
 }
 
 .secondary-button {
   padding: 0 14px;
-  color: #173449;
-  background: #e3edf2;
+  color: #2f3943;
+  background: #ece8e2;
   font-weight: 720;
 }
 
@@ -558,13 +564,13 @@ h2 {
   gap: 6px;
   margin-top: 14px;
   padding: 12px;
-  border: 1px solid #b9ded5;
+  border: 1px solid #f1c59e;
   border-radius: 8px;
-  background: #eef8f4;
+  background: var(--accent-orange-soft);
 }
 
 .range-box strong {
-  color: #173449;
+  color: var(--brand-dark);
 }
 
 .range-box span,
@@ -590,8 +596,8 @@ h2 {
 .icon-button {
   width: 40px;
   height: 40px;
-  color: #173449;
-  background: #dbeaf1;
+  color: #2f3943;
+  background: #ece8e2;
 }
 
 .icon-button.danger {
@@ -638,13 +644,13 @@ svg {
 }
 
 .notice.info {
-  color: #173449;
-  background: #dcebf4;
+  color: #4c210d;
+  background: var(--accent-orange-soft);
 }
 
 .notice.success {
   color: #0f513e;
-  background: #dcefe8;
+  background: #e5f3ee;
 }
 
 .notice.error {
@@ -787,8 +793,8 @@ select {
 
 input:focus,
 select:focus {
-  border-color: #0c7b63;
-  outline: 3px solid rgba(12, 123, 99, 0.15);
+  border-color: var(--accent-orange);
+  outline: 3px solid rgba(232, 121, 46, 0.16);
 }
 
 .field-error {
@@ -811,7 +817,7 @@ select:focus {
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: #f1f7f5;
+  background: #fff6ec;
 }
 
 .selected-interval span {
@@ -1019,7 +1025,7 @@ td:first-child {
 }
 
 .warning-text {
-  color: #9a5b00;
+  color: var(--accent-orange-dark);
   font-weight: 800;
 }
 
@@ -1047,8 +1053,8 @@ td:first-child {
 }
 
 .review-row.active {
-  outline: 3px solid rgba(12, 123, 99, 0.16);
-  background: #f1f7f5;
+  outline: 3px solid rgba(232, 121, 46, 0.16);
+  background: #fff6ec;
 }
 
 .review-row p {
@@ -1093,8 +1099,8 @@ td:first-child {
 }
 
 .context-line.target {
-  border: 1px solid #0c7b63;
-  background: #eef8f4;
+  border: 1px solid var(--accent-orange);
+  background: #fff6ec;
 }
 
 .context-line span {
@@ -1106,7 +1112,7 @@ td:first-child {
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #173449;
+  color: var(--brand-dark);
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
   font-size: 0.86rem;
   line-height: 1.5;
