@@ -48,17 +48,11 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 1024,
-    minHeight: 720,
+    minWidth: 760,
+    minHeight: 560,
     title: 'WhatsApp Delivery Counter',
-    backgroundColor: '#f6f7f9',
+    backgroundColor: '#f4f0ea',
     autoHideMenuBar: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#eef2f5',
-      symbolColor: '#173449',
-      height: 36,
-    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

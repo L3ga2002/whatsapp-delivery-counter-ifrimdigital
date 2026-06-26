@@ -244,6 +244,34 @@ export default function App(): JSX.Element {
     }
   };
 
+  const handleDeleteReport = async (reportToDelete: Report): Promise<void> => {
+    if (!desktopApi || isBusy) {
+      return;
+    }
+    const importCount = workspace?.reportImports.filter((item) => item.reportId === reportToDelete.id).length ?? 0;
+    const confirmed = window.confirm(
+      `Stergi raportul "${reportToDelete.name}"?${importCount ? ` Se sterg si cele ${importCount} importuri/conversatii atasate acestui raport.` : ''}`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const nextWorkspace = await desktopApi.deleteReport(reportToDelete.id);
+      const nextReport = nextWorkspace.reports.find((item) => item.id !== reportToDelete.id) ?? nextWorkspace.reports[0] ?? null;
+      setWorkspace(nextWorkspace);
+      setSelectedReportId(nextReport?.id ?? '');
+      setScanOptions(nextReport?.scanOptions ?? defaultScanOptions);
+      setReport(null);
+      setActiveReviewRow(null);
+      setNotice({ kind: 'success', text: 'Raport sters.' });
+    } catch (error) {
+      setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge raportul.') });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleImportToReport = async (role: ReportImportRole, restaurantId: string): Promise<void> => {
     if (!desktopApi || !selectedReport || isBusy) {
       return;
@@ -605,6 +633,7 @@ export default function App(): JSX.Element {
             activeReviewRow={activeReviewRow}
             setActiveReviewRow={setActiveReviewRow}
             onSaveReport={handleSaveReport}
+            onDeleteReport={handleDeleteReport}
             onCreateRestaurant={handleSaveRestaurant}
             onImport={handleImportToReport}
             onDeleteImport={handleDeleteReportImport}
@@ -820,6 +849,7 @@ function ReportsView({
   activeReviewRow,
   setActiveReviewRow,
   onSaveReport,
+  onDeleteReport,
   onCreateRestaurant,
   onImport,
   onDeleteImport,
@@ -841,6 +871,7 @@ function ReportsView({
   activeReviewRow: ReviewRow | null;
   setActiveReviewRow: (row: ReviewRow | null) => void;
   onSaveReport: (input: { id?: string; name: string; from: string; to: string }) => Promise<void>;
+  onDeleteReport: (report: Report) => Promise<void>;
   onCreateRestaurant: (input: RestaurantInput) => Promise<Restaurant | null>;
   onImport: (role: ReportImportRole, restaurantId: string) => Promise<void>;
   onDeleteImport: (importItem: ReportImport) => Promise<void>;
@@ -887,6 +918,7 @@ function ReportsView({
   const quickExportRestaurantIsValid = restaurantExportOptions.some((restaurant) => restaurant.id === quickExportRestaurantId);
   const selectedExportRestaurantId = quickExportRestaurantIsValid ? quickExportRestaurantId : restaurantExportOptions[0]?.id ?? '';
   const scanImportValidation = selectedReport ? validateScanImports(scanOptions, selectedReportImports) : null;
+  const stepGuidance = getStepGuidance(currentStep, selectedReportImports.length, Boolean(report));
 
   useEffect(() => {
     setQuickExportRestaurantId('');
@@ -935,7 +967,7 @@ function ReportsView({
         <div>
           <p className="eyebrow">Flux ghidat</p>
           <h2>{selectedReport ? selectedReport.name : 'Creeaza un raport si importa conversatiile'}</h2>
-          <p>Urmeaza pasii de mai jos: interval, importuri, verificare, scanare, export. Optiunile tehnice sunt ascunse pana ai nevoie de ele.</p>
+          <p>Urmeaza pasii simpli: creezi intervalul, importi conversatiile, verifici, scanezi si descarci Excel.</p>
         </div>
         <button className="primary-button" type="button" onClick={createNewReportDraft}>
           <FileArchive aria-hidden="true" />
@@ -944,11 +976,16 @@ function ReportsView({
       </section>
 
       <section className="step-strip" aria-label="Pasi raport">
-        <StepBadge index={1} label="Interval" active={currentStep === 'interval'} complete={Boolean(selectedReport && !selectedReportHasInvalidInterval)} />
-        <StepBadge index={2} label="Importuri" active={currentStep === 'imports'} complete={selectedReportImports.length > 0} />
-        <StepBadge index={3} label="Verificare" active={currentStep === 'review-imports'} complete={Boolean(importRange)} />
-        <StepBadge index={4} label="Scanare" active={currentStep === 'scan'} complete={Boolean(report)} />
-        <StepBadge index={5} label="Rezultate" active={currentStep === 'results'} complete={Boolean(report)} />
+        <StepBadge index={1} label="Creeaza intervalul" active={currentStep === 'interval'} complete={Boolean(selectedReport && !selectedReportHasInvalidInterval)} />
+        <StepBadge index={2} label="Importa conversatii" active={currentStep === 'imports'} complete={selectedReportImports.length > 0} />
+        <StepBadge index={3} label="Verifica importurile" active={currentStep === 'review-imports'} complete={Boolean(importRange)} />
+        <StepBadge index={4} label="Scaneaza raportul" active={currentStep === 'scan'} complete={Boolean(report)} />
+        <StepBadge index={5} label="Descarca Excel" active={currentStep === 'results'} complete={Boolean(report)} />
+      </section>
+
+      <section className="next-step-card" aria-live="polite">
+        <strong>Ce faci acum?</strong>
+        <span>{stepGuidance}</span>
       </section>
 
       <section className="workspace-grid guided-grid">
@@ -957,21 +994,35 @@ function ReportsView({
             <FileArchive aria-hidden="true" />
             <div>
               <h2>Rapoarte</h2>
-              <p>Alege raportul pe care lucrezi acum.</p>
+              <p>Alege raportul sau sterge rapoartele de test.</p>
             </div>
           </div>
           <div className="entity-list compact-list">
             {workspace.reports.length ? workspace.reports.map((item) => (
-              <button
-                className={`entity-button ${item.id === selectedReportId ? 'active' : ''}`}
+              <div
+                className={`entity-row report-list-item ${item.id === selectedReportId ? 'active' : ''}`}
                 key={item.id}
-                type="button"
-                onClick={() => onSelectReport(item.id)}
               >
-                <strong>{item.name}</strong>
-                <span>{formatDateTime(item.fromIso)} - {formatDateTime(item.toIso)}</span>
-                <small>{formatReportStatus(item.status)}</small>
-              </button>
+                <button
+                  className="report-select-button"
+                  type="button"
+                  onClick={() => onSelectReport(item.id)}
+                >
+                  <strong>{item.name}</strong>
+                  <span>{formatDateTime(item.fromIso)} - {formatDateTime(item.toIso)}</span>
+                  <small>{formatReportStatus(item.status)}</small>
+                </button>
+                <button
+                  className="icon-button danger"
+                  type="button"
+                  title={`Sterge raportul ${item.name}`}
+                  aria-label={`Sterge raportul ${item.name}`}
+                  onClick={() => void onDeleteReport(item)}
+                  disabled={isBusy}
+                >
+                  <Trash2 aria-hidden="true" />
+                </button>
+              </div>
             )) : <EmptyState text="Nu exista rapoarte salvate inca." />}
           </div>
         </div>
@@ -981,7 +1032,7 @@ function ReportsView({
             <Clock3 aria-hidden="true" />
             <div>
               <h2>1. Interval raport</h2>
-              <p>Acesta este intervalul folosit la scanare.</p>
+              <p>Alege perioada exacta pe care vrei sa o numeri.</p>
             </div>
           </div>
           <div className="form-grid">
@@ -1030,7 +1081,7 @@ function ReportsView({
             <Upload aria-hidden="true" />
             <div>
               <h2>2. Import conversații</h2>
-              <p>Alege daca importi un restaurant sau grupul de pontaj.</p>
+              <p>Importa restaurantul sau grupul separat de pontaj.</p>
             </div>
           </div>
           {selectedReport ? (
@@ -1071,7 +1122,7 @@ function ReportsView({
               )}
               <button className="primary-button" type="button" onClick={() => void handleImportClick()} disabled={isBusy || (importMode === 'restaurant' && !importRestaurantId)}>
                 {isBusy ? <Loader2 className="spin" aria-hidden="true" /> : <Upload aria-hidden="true" />}
-                <span>{importMode === 'workHours' ? 'Importa pontaj' : 'Importa WhatsApp restaurant'}</span>
+                <span>{importMode === 'workHours' ? 'Importa pontaj' : 'Importa restaurant'}</span>
               </button>
             </>
           ) : (
@@ -1084,7 +1135,7 @@ function ReportsView({
             <CheckCircle2 aria-hidden="true" />
             <div>
               <h2>3. Verificare import</h2>
-              <p>Confirma ce conversatii sunt atasate raportului.</p>
+              <p>Uita-te daca ai atasat conversatiile corecte.</p>
             </div>
           </div>
           <section className="metrics-row compact-metrics">
@@ -3049,6 +3100,26 @@ function getReportStep(
     return 'review-imports';
   }
   return 'scan';
+}
+
+function getStepGuidance(step: ReportStep, importCount: number, hasReport: boolean): string {
+  if (step === 'interval') {
+    return 'Completeaza numele raportului si perioada exacta, apoi apasa Creeaza raport.';
+  }
+  if (step === 'imports') {
+    return 'Alege restaurantul, importa conversatia WhatsApp, apoi repeta pentru fiecare restaurant din raport.';
+  }
+  if (step === 'review-imports') {
+    return 'Verifica lista de importuri si perioada gasita in conversatii inainte de scanare.';
+  }
+  if (step === 'scan') {
+    return importCount > 1
+      ? 'Ai importurile atasate. Apasa Scaneaza raport ca sa calculezi toate restaurantele.'
+      : 'Ai un import atasat. Apasa Scaneaza raport ca sa calculezi rezultatele.';
+  }
+  return hasReport
+    ? 'Verifica rezultatele si descarca Excel-ul complet sau raportul unui restaurant.'
+    : 'Dupa scanare, aici vei vedea raportul si butoanele de export.';
 }
 
 function buildImportRangeWarning(report: Report, importRange: ImportRange): string | null {
