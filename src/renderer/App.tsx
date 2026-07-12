@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type ExcelJS from 'exceljs';
+import { DayPicker } from 'react-day-picker';
+import { ro } from 'date-fns/locale';
 import {
   AlertTriangle,
   Building2,
+  CalendarDays,
   CheckCircle2,
   Clock3,
   Download,
@@ -167,17 +170,21 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleSaveCourier = async (input: CourierInput): Promise<void> => {
+  const handleSaveCourier = async (input: CourierInput): Promise<boolean> => {
     if (!desktopApi || isBusy) {
-      return;
+      return false;
     }
     setIsBusy(true);
     try {
       await desktopApi.saveCourier(input);
       await reloadWorkspace();
-      setNotice({ kind: 'success', text: 'Curier salvat.' });
+      setReport(null);
+      setActiveReviewRow(null);
+      setNotice({ kind: 'success', text: 'Curier salvat. Scaneaza din nou raportul pentru a aplica aliasurile.' });
+      return true;
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut salva curierul.') });
+      return false;
     } finally {
       setIsBusy(false);
     }
@@ -794,7 +801,7 @@ function CouriersView({
   isBusy,
 }: {
   couriers: Courier[];
-  onSave: (input: CourierInput) => Promise<void>;
+  onSave: (input: CourierInput) => Promise<boolean>;
   onDelete: (courierId: string) => Promise<void>;
   isBusy: boolean;
 }): JSX.Element {
@@ -813,8 +820,8 @@ function CouriersView({
           { label: 'Observatii', value: draft.notes, onChange: (value) => setDraft((current) => ({ ...current, notes: value })) },
         ]}
         onSubmit={async () => {
-          await onSave({ name: draft.name, phone: draft.phone, aliases: splitList(draft.aliases), notes: draft.notes });
-          setDraft({ name: '', phone: '', aliases: '', notes: '' });
+          const saved = await onSave({ name: draft.name, phone: draft.phone, aliases: splitList(draft.aliases), notes: draft.notes });
+          if (saved) setDraft({ name: '', phone: '', aliases: '', notes: '' });
         }}
       />
       <EntityTable
@@ -831,6 +838,96 @@ function CouriersView({
         deleteLabel="Sterge"
         disabled={isBusy}
       />
+    </div>
+  );
+}
+
+function DateTimePicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const selectedDate = parseDateTimeInputValue(value) ?? new Date();
+  const timeValue = value.slice(11, 16) || '00:00';
+
+  const closePicker = (): void => {
+    setIsOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent): void => {
+      if (!containerRef.current?.contains(event.target as Node)) closePicker();
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closePicker();
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isOpen]);
+
+  const updateDate = (date: Date | undefined): void => {
+    if (!date) return;
+    const [hours, minutes] = timeValue.split(':').map(Number);
+    const next = new Date(date);
+    next.setHours(hours || 0, minutes || 0, 0, 0);
+    onChange(toDateTimeInputValue(next));
+  };
+
+  const updateTime = (time: string): void => {
+    const [hours, minutes] = time.split(':').map(Number);
+    const next = new Date(selectedDate);
+    next.setHours(hours || 0, minutes || 0, 0, 0);
+    onChange(toDateTimeInputValue(next));
+  };
+
+  return (
+    <div className="date-time-field" ref={containerRef}>
+      <span className="field-label">{label}</span>
+      <button
+        ref={triggerRef}
+        className="date-time-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span>{formatLocalDateTimeValue(value)}</span>
+        <CalendarDays aria-hidden="true" />
+      </button>
+      {isOpen ? (
+        <div className="date-time-popover" role="dialog" aria-label={`Selecteaza ${label.toLocaleLowerCase('ro-RO')}`}>
+          <DayPicker
+            mode="single"
+            autoFocus
+            locale={ro}
+            weekStartsOn={1}
+            selected={selectedDate}
+            defaultMonth={selectedDate}
+            onSelect={updateDate}
+            showOutsideDays
+          />
+          <div className="time-picker-row">
+            <label>
+              Ora
+              <input type="time" value={timeValue} onChange={(event) => updateTime(event.target.value)} />
+            </label>
+            <button className="primary-button compact" type="button" onClick={closePicker}>Gata</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1035,19 +1132,21 @@ function ReportsView({
               <p>Alege perioada exacta pe care vrei sa o numeri.</p>
             </div>
           </div>
-          <div className="form-grid">
+          <div className="form-grid report-interval-grid">
             <label>
               Nume raport
               <input value={reportDraft.name} onChange={(event) => setReportDraft((current) => ({ ...current, name: event.target.value }))} />
             </label>
-            <label>
-              De la
-              <input type="datetime-local" value={reportDraft.from} onChange={(event) => setReportDraft((current) => ({ ...current, from: event.target.value }))} />
-            </label>
-            <label>
-              Pana la
-              <input type="datetime-local" value={reportDraft.to} onChange={(event) => setReportDraft((current) => ({ ...current, to: event.target.value }))} />
-            </label>
+            <DateTimePicker
+              label="De la"
+              value={reportDraft.from}
+              onChange={(value) => setReportDraft((current) => ({ ...current, from: value }))}
+            />
+            <DateTimePicker
+              label="Pana la"
+              value={reportDraft.to}
+              onChange={(value) => setReportDraft((current) => ({ ...current, to: value }))}
+            />
           </div>
           {selectedReport ? (
             <div className="selected-interval-card">
@@ -1333,6 +1432,9 @@ function SettingsView({
           <Metric label="Export implicit" value={workspace.settings.defaultExportScope} />
           <Metric label="Retentie importuri" value={`${workspace.settings.importRetentionDays} zile`} />
         </div>
+        {workspace.maintenanceNotices.map((message) => (
+          <div className="notice warning" key={message}>{message}</div>
+        ))}
       </section>
       <section className="panel">
         <div className="panel-heading">
@@ -3230,6 +3332,27 @@ function toDateTimeInputValue(date: Date): string {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
+function parseDateTimeInputValue(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hours, minutes] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hours), Number(minutes), 0, 0);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatLocalDateTimeValue(value: string): string {
+  const date = parseDateTimeInputValue(value);
+  if (!date) return 'Alege data si ora';
+  return new Intl.DateTimeFormat('ro-RO', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
 function formatDateTime(iso: string): string {
   return new Intl.DateTimeFormat('ro-RO', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso));
 }
@@ -3341,5 +3464,9 @@ function sum(rows: DailyCourierSummary[], key: 'pickedUp' | 'nightPickedUp' | 'd
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+  if (!(error instanceof Error) || !error.message) return fallback;
+  return error.message
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim() || fallback;
 }

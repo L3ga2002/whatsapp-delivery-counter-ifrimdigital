@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js';
+import { normalizeCourierIdentity } from '../src/shared/parser';
 import {
   PARSER_VERSION,
   type AliasMap,
@@ -88,6 +89,7 @@ export class WorkspaceStore {
       reports: this.listReports(),
       reportImports: this.listReportImports(),
       settings,
+      maintenanceNotices: this.getSetting<string[]>('maintenanceNotices', []),
       parserVersion: {
         version: PARSER_VERSION,
         label: `Parser ${PARSER_VERSION}`,
@@ -155,6 +157,14 @@ export class WorkspaceStore {
       importRetentionDays: clampInteger(input.importRetentionDays, 1, 365, defaultSettings.importRetentionDays),
     };
     this.setSetting('settings', settings);
+    await this.save();
+  }
+
+  async addMaintenanceNotice(message: string): Promise<void> {
+    const cleanMessage = message.trim();
+    if (!cleanMessage) return;
+    const notices = this.getSetting<string[]>('maintenanceNotices', []);
+    this.setSetting('maintenanceNotices', [...new Set([...notices, cleanMessage])]);
     await this.save();
   }
 
@@ -226,6 +236,21 @@ export class WorkspaceStore {
       createdAtIso: existing?.createdAtIso ?? now,
       updatedAtIso: now,
     };
+
+    const requestedIdentities = new Set(
+      [courier.phone, ...courier.aliases]
+        .map(normalizeCourierIdentity)
+        .filter(Boolean),
+    );
+    for (const other of this.listCouriers()) {
+      if (other.id === courier.id) continue;
+      const conflictingIdentity = [other.phone, ...other.aliases]
+        .map(normalizeCourierIdentity)
+        .find((identity) => identity && requestedIdentities.has(identity));
+      if (conflictingIdentity) {
+        throw new Error(`Telefonul sau aliasul este deja asociat curierului ${other.name}.`);
+      }
+    }
 
     this.run(
       `insert or replace into couriers
@@ -482,6 +507,53 @@ export class WorkspaceStore {
     }
 
     return this.getAliasMap();
+  }
+
+  async migrateLegacyAliases(aliases: AliasMap): Promise<{ imported: number; conflicts: string[]; skipped: boolean }> {
+    if (this.getSetting<boolean>('legacyCourierAliasesMigrationV1', false)) {
+      return { imported: 0, conflicts: [], skipped: true };
+    }
+
+    const conflicts: string[] = [];
+    let imported = 0;
+    const identityOwners = new Map<string, string>();
+    for (const [alias, displayName] of Object.entries(this.getAliasMap())) {
+      const identity = normalizeCourierIdentity(alias);
+      if (identity) identityOwners.set(identity, displayName);
+    }
+
+    for (const [sender, displayName] of Object.entries(aliases)) {
+      const cleanSender = sender.trim();
+      const cleanDisplayName = displayName.trim();
+      const identity = normalizeCourierIdentity(cleanSender);
+      if (!cleanSender || !cleanDisplayName || !identity) continue;
+
+      const currentOwner = identityOwners.get(identity);
+      if (currentOwner) {
+        if (currentOwner.toLocaleLowerCase('ro-RO') !== cleanDisplayName.toLocaleLowerCase('ro-RO')) {
+          conflicts.push(`${cleanSender}: ${currentOwner} / ${cleanDisplayName}`);
+        }
+        continue;
+      }
+
+      const existing = this.listCouriers().find(
+        (courier) => courier.name.toLocaleLowerCase('ro-RO') === cleanDisplayName.toLocaleLowerCase('ro-RO'),
+      );
+      await this.saveCourier({
+        id: existing?.id,
+        name: cleanDisplayName,
+        phone: existing?.phone ?? '',
+        aliases: cleanList([...(existing?.aliases ?? []), cleanSender]),
+        isActive: existing?.isActive ?? true,
+        notes: existing?.notes ?? 'Migrat automat din aliasurile versiunii anterioare.',
+      });
+      identityOwners.set(identity, cleanDisplayName);
+      imported += 1;
+    }
+
+    if (conflicts.length === 0) this.setSetting('legacyCourierAliasesMigrationV1', true);
+    await this.save();
+    return { imported, conflicts, skipped: false };
   }
 
   private migrate(): void {

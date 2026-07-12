@@ -288,6 +288,7 @@ export interface WorkspaceSnapshot {
   reports: Report[];
   reportImports: ReportImport[];
   settings: AppSettings;
+  maintenanceNotices: string[];
   parserVersion: ParserVersion;
 }
 

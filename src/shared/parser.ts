@@ -1025,7 +1025,32 @@ function maxIso(current: string | null, next: string): string {
 
 export function resolveCourierName(senderRaw: string, aliases: AliasMap): string {
   const alias = aliases[senderRaw]?.trim();
-  return alias || senderRaw;
+  if (alias) return alias;
+
+  const senderIdentity = normalizeCourierIdentity(senderRaw);
+  if (!senderIdentity) return senderRaw;
+  for (const [savedAlias, displayName] of Object.entries(aliases)) {
+    if (normalizeCourierIdentity(savedAlias) === senderIdentity && displayName.trim()) {
+      return displayName.trim();
+    }
+  }
+  return senderRaw;
+}
+
+export function normalizeCourierIdentity(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const digits = trimmed.replace(/\D/g, '');
+  const looksLikePhone = /^[+\d\s().-]+$/.test(trimmed) && digits.length >= 9;
+  if (looksLikePhone) {
+    let normalized = digits.startsWith('00') ? digits.slice(2) : digits;
+    if (normalized.length === 10 && normalized.startsWith('0')) normalized = `40${normalized.slice(1)}`;
+    if (normalized.length === 9 && normalized.startsWith('7')) normalized = `40${normalized}`;
+    return `phone:${normalized}`;
+  }
+
+  return `text:${trimmed.toLocaleLowerCase('ro-RO').replace(/\s+/g, ' ')}`;
 }
 
 export function isLikelyPhoneSender(senderRaw: string): boolean {

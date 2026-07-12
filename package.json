@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-delivery-counter-ifrimdigital",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "author": "IfrimDigital",
   "description": "Windows desktop app for counting courier activity from exported WhatsApp chats.",
@@ -27,11 +27,13 @@
   "dependencies": {
     "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-react": "^5.0.0",
+    "date-fns": "^4.4.0",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
+    "react-day-picker": "^10.0.1",
     "react-dom": "^18.3.1",
     "sql.js": "^1.14.1"
   },
@@ -41,11 +43,11 @@
     "@types/react-dom": "^18.3.1",
     "concurrently": "^10.0.3",
     "cross-env": "^7.0.3",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^2.1.8",
+    "vitest": "^4.1.10",
     "wait-on": "^9.0.10"
   },
   "build": {

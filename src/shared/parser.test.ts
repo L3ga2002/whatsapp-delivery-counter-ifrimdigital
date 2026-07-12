@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { buildScanReport, parseImportedTexts, parseWhatsAppExport } from './parser';
+import {
+  buildScanReport,
+  normalizeCourierIdentity,
+  parseImportedTexts,
+  parseWhatsAppExport,
+  resolveCourierName,
+} from './parser';
 
 describe('WhatsApp export parser', () => {
+  it('matches Romanian courier phone aliases across common WhatsApp formats', () => {
+    const aliases = { '0745 123 456': 'Robert Ifrim' };
+
+    expect(resolveCourierName('+40 745 123 456', aliases)).toBe('Robert Ifrim');
+    expect(resolveCourierName('0040 745-123-456', aliases)).toBe('Robert Ifrim');
+    expect(resolveCourierName('745123456', aliases)).toBe('Robert Ifrim');
+    expect(normalizeCourierIdentity('0745 123 456')).toBe('phone:40745123456');
+  });
+
+  it('matches courier text aliases without depending on case or repeated spaces', () => {
+    expect(resolveCourierName('  ROBERT   Delivery  ', { 'Robert Delivery': 'Robert Ifrim' })).toBe('Robert Ifrim');
+  });
+
   it('parses Romanian WhatsApp delivery lines with statuses, quantities, and notes', () => {
     const parsed = parseWhatsAppExport(
       [

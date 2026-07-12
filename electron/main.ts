@@ -81,6 +81,28 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   workspaceStore = new WorkspaceStore(app.getPath('userData'));
   await workspaceStore.init();
+  const legacyAliasRead = await readAliases();
+  if (legacyAliasRead.errorMessage) {
+    await backupLegacyAliasFile();
+    await workspaceStore.addMaintenanceNotice(legacyAliasRead.errorMessage);
+  } else if (Object.keys(legacyAliasRead.aliases).length > 0) {
+    await backupLegacyAliasFile();
+    try {
+      const migration = await workspaceStore.migrateLegacyAliases(legacyAliasRead.aliases);
+      if (migration.imported > 0) console.info(`[aliases] Migrated ${migration.imported} legacy aliases to workspace.`);
+      if (migration.conflicts.length > 0) {
+        console.warn(`[aliases] ${migration.conflicts.length} legacy alias conflicts require manual review.`);
+        await workspaceStore.addMaintenanceNotice(
+          `${migration.conflicts.length} aliasuri vechi au intrat in conflict. Verifica lista Curieri inainte de urmatoarea scanare.`,
+        );
+      }
+    } catch (error) {
+      console.error('[aliases] Legacy migration failed.', error);
+      await workspaceStore.addMaintenanceNotice(
+        'Migrarea aliasurilor vechi nu a putut fi finalizata. Copia de siguranta a fost pastrata; verifica lista Curieri.',
+      );
+    }
+  }
   configureUpdaterEvents();
   registerIpcHandlers();
   createWindow();
@@ -482,17 +504,20 @@ function getZipEntryUncompressedSize(entry: JSZip.JSZipObject): number | null {
   return typeof size === 'number' && Number.isFinite(size) ? size : null;
 }
 
-async function readAliases(): Promise<AliasMap> {
+async function readAliases(): Promise<{ aliases: AliasMap; errorMessage?: string }> {
   try {
     const raw = await fs.readFile(aliasFilePath(), 'utf8');
-    return sanitizeAliases(JSON.parse(raw) as AliasMap);
+    return { aliases: sanitizeAliases(JSON.parse(raw) as AliasMap) };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
-      return {};
+      return { aliases: {} };
     }
-    console.warn('[aliases] Could not read aliases; starting with empty map.', error);
-    return {};
+    console.warn('[aliases] Could not read legacy aliases.', error);
+    return {
+      aliases: {},
+      errorMessage: 'Fisierul vechi de aliasuri nu a putut fi citit. Copia de siguranta a fost pastrata; verifica lista Curieri.',
+    };
   }
 }
 
@@ -550,6 +575,15 @@ function materializeReportInputs(
 
 function aliasFilePath(): string {
   return path.join(app.getPath('userData'), aliasFileName);
+}
+
+async function backupLegacyAliasFile(): Promise<void> {
+  const backupPath = path.join(app.getPath('userData'), 'courier-aliases.pre-sqlite-backup.json');
+  try {
+    await fs.access(backupPath);
+  } catch {
+    await fs.copyFile(aliasFilePath(), backupPath);
+  }
 }
 
 function configureUpdaterEvents(): void {

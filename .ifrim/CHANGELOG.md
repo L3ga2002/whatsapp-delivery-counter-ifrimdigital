@@ -1,5 +1,15 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-12 - v0.3.11
+
+- Replaced the Windows-dependent date input with a Romanian Monday-first calendar and separate time selector.
+- Restored legacy courier aliases into SQLite with a non-destructive backup and visible migration warnings.
+- Normalized Romanian phone aliases across `07`, `+40`, and `0040` formats and rejected ambiguous duplicate ownership.
+- Invalidated saved scan results after courier changes so reports are recalculated with current aliases.
+- Hardened renderer error messages and Vitest generated-output exclusions.
+- Upgraded Electron, electron-builder, and Vitest to patched current versions; rebuilt installer, portable app, update metadata, and SHA-256 hashes.
+- Verified a real saved-report scan and rendered the generated Excel workbook for visual QA.
+
 ## 2026-06-23
 
 - Added mandatory central thread bootstrap and agent routing requirement to `NEXT_SESSION.md` and `THREAD_PROMPT.md`.
