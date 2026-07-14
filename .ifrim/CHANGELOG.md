@@ -1,5 +1,18 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-15 - v0.3.12
+
+- Added courier editing with explicit save/cancel actions and preserved the previous courier name automatically as a WhatsApp alias after renaming.
+- Invalidated scanned reports after courier identity changes so rescanning always applies the current alias map.
+- Fixed the calendar outside-click focus race that could make text fields appear blocked until restarting the app.
+- Renamed exterior deliveries to `Comenzi speciale` throughout the UI and Excel reports without changing their calculation semantics.
+- Added a normalized `EXPORT_SAPTAMANAL` worksheet compatible with the client's salary workbook columns, while leaving salary revenue fields empty for the client's configured formulas.
+- Kept `EXPORT_SAPTAMANAL` to the exact 11-column import contract; special-order details remain in the technical worksheets.
+- Avoided unnecessary report rescans for notes-only or identical courier saves while retaining invalidation for alias, phone, name, and active-state changes.
+- Protected unsaved courier edits and disabled form fields while persistence is in progress.
+- Pinned the verified Windows packaging toolchain to `electron-builder 25.1.8`.
+- Verified real Electron editing, calendar-to-input focus, a saved-report scan, full Excel export, XML structure, rendered workbook layout, and formula-error scan.
+
 ## 2026-07-12 - v0.3.11
 
 - Replaced the Windows-dependent date input with a Romanian Monday-first calendar and separate time selector.

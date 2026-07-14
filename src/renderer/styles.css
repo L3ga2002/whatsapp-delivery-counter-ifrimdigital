@@ -545,6 +545,19 @@ button {
   gap: 4px;
 }
 
+.entity-actions,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.entity-actions svg {
+  width: 16px;
+  height: 16px;
+}
+
 .entity-button {
   cursor: pointer;
 }

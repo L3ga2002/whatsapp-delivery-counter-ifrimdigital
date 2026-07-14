@@ -61,5 +61,69 @@ describe('WorkspaceStore courier identity ownership', () => {
     await store.saveCourier({ id: courier.id, name: 'Ana Ifrim', phone: '0040 745 123 456', aliases: [] });
 
     expect(store.listCouriers()).toMatchObject([{ name: 'Ana Ifrim', phone: '0040 745 123 456' }]);
+    expect(store.getAliasMap()).toEqual({
+      '0040 745 123 456': 'Ana Ifrim',
+      Ana: 'Ana Ifrim',
+    });
+  });
+
+  it('marks scanned reports as draft after a courier identity changes', async () => {
+    const store = await createStore();
+    const courier = await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });
+    const report = await store.saveReport({
+      name: 'Raport test',
+      fromIso: '2026-06-15T07:00:00.000Z',
+      toIso: '2026-06-22T01:00:00.000Z',
+    });
+    await store.markReportScanned(report.id, report.scanOptions);
+
+    await store.saveCourier({
+      id: courier.id,
+      name: 'Ana Ifrim',
+      phone: '',
+      aliases: ['Ana WhatsApp'],
+    });
+
+    expect(store.getReport(report.id)).toMatchObject({ status: 'draft', scannedAtIso: null });
+    expect(store.getAliasMap()).toEqual({
+      'Ana WhatsApp': 'Ana Ifrim',
+      Ana: 'Ana Ifrim',
+    });
+  });
+
+  it('keeps scanned reports intact when only courier notes change', async () => {
+    const store = await createStore();
+    const courier = await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });
+    const report = await store.saveReport({
+      name: 'Raport test',
+      fromIso: '2026-06-15T07:00:00.000Z',
+      toIso: '2026-06-22T01:00:00.000Z',
+    });
+    await store.markReportScanned(report.id, report.scanOptions);
+
+    await store.saveCourier({
+      id: courier.id,
+      name: courier.name,
+      phone: courier.phone,
+      aliases: courier.aliases,
+      notes: 'Observatie noua, fara efect asupra aliasurilor.',
+    });
+
+    expect(store.getReport(report.id)).toMatchObject({ status: 'scanned' });
+    expect(store.getReport(report.id)?.scannedAtIso).not.toBeNull();
+  });
+
+  it('invalidates scanned reports when a newly created courier introduces an alias', async () => {
+    const store = await createStore();
+    const report = await store.saveReport({
+      name: 'Raport test',
+      fromIso: '2026-06-15T07:00:00.000Z',
+      toIso: '2026-06-22T01:00:00.000Z',
+    });
+    await store.markReportScanned(report.id, report.scanOptions);
+
+    await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });
+
+    expect(store.getReport(report.id)).toMatchObject({ status: 'draft', scannedAtIso: null });
   });
 });

@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   Loader2,
   MapPin,
+  Pencil,
   RefreshCw,
   Search,
   Settings,
@@ -805,13 +806,26 @@ function CouriersView({
   onDelete: (courierId: string) => Promise<void>;
   isBusy: boolean;
 }): JSX.Element {
-  const [draft, setDraft] = useState({ name: '', phone: '', aliases: '', notes: '' });
+  const emptyDraft = { id: '', name: '', phone: '', aliases: '', notes: '' };
+  const [draft, setDraft] = useState(emptyDraft);
+  const [initialDraft, setInitialDraft] = useState(emptyDraft);
+  const isEditing = Boolean(draft.id);
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
+
+  const resetDraft = (): void => {
+    setDraft(emptyDraft);
+    setInitialDraft(emptyDraft);
+  };
+
+  const confirmDiscard = (): boolean => (
+    !isDirty || window.confirm('Ai modificari nesalvate. Renunti la ele?')
+  );
 
   return (
     <div className="view-stack">
       <EntityForm
-        title="Adauga curier"
-        description="Aliasurile unifica numele diferite din grupurile WhatsApp."
+        title={isEditing ? 'Editeaza curier' : 'Adauga curier'}
+        description="Adauga exact numele sau telefonul afisat in conversatia WhatsApp. Dupa salvare, rescaneaza raportul."
         disabled={isBusy}
         fields={[
           { label: 'Nume curier', value: draft.name, onChange: (value) => setDraft((current) => ({ ...current, name: value })) },
@@ -819,9 +833,19 @@ function CouriersView({
           { label: 'Aliasuri WhatsApp', value: draft.aliases, onChange: (value) => setDraft((current) => ({ ...current, aliases: value })) },
           { label: 'Observatii', value: draft.notes, onChange: (value) => setDraft((current) => ({ ...current, notes: value })) },
         ]}
+        submitLabel={isBusy ? 'Se salveaza...' : isEditing ? 'Salveaza modificarile' : 'Salveaza curierul'}
+        onCancel={isEditing ? () => {
+          if (confirmDiscard()) resetDraft();
+        } : undefined}
         onSubmit={async () => {
-          const saved = await onSave({ name: draft.name, phone: draft.phone, aliases: splitList(draft.aliases), notes: draft.notes });
-          if (saved) setDraft({ name: '', phone: '', aliases: '', notes: '' });
+          const saved = await onSave({
+            id: draft.id || undefined,
+            name: draft.name,
+            phone: draft.phone,
+            aliases: splitList(draft.aliases),
+            notes: draft.notes,
+          });
+          if (saved) resetDraft();
         }}
       />
       <EntityTable
@@ -834,6 +858,22 @@ function CouriersView({
           meta: courier.isActive ? 'activ' : 'inactiv',
           inactive: !courier.isActive,
         }))}
+        onEdit={(courierId) => {
+          const courier = couriers.find((item) => item.id === courierId);
+          if (!courier) return;
+          if (courier.id === draft.id) return;
+          if (!confirmDiscard()) return;
+          const nextDraft = {
+            id: courier.id,
+            name: courier.name,
+            phone: courier.phone,
+            aliases: courier.aliases.join(', '),
+            notes: courier.notes,
+          };
+          setDraft(nextDraft);
+          setInitialDraft(nextDraft);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
         onDelete={onDelete}
         deleteLabel="Sterge"
         disabled={isBusy}
@@ -857,15 +897,17 @@ function DateTimePicker({
   const selectedDate = parseDateTimeInputValue(value) ?? new Date();
   const timeValue = value.slice(11, 16) || '00:00';
 
-  const closePicker = (): void => {
+  const closePicker = (restoreFocus = true): void => {
     setIsOpen(false);
-    window.requestAnimationFrame(() => triggerRef.current?.focus());
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    }
   };
 
   useEffect(() => {
     if (!isOpen) return;
     const closeOnOutsideClick = (event: MouseEvent): void => {
-      if (!containerRef.current?.contains(event.target as Node)) closePicker();
+      if (!containerRef.current?.contains(event.target as Node)) closePicker(false);
     };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') closePicker();
@@ -924,7 +966,7 @@ function DateTimePicker({
               Ora
               <input type="time" value={timeValue} onChange={(event) => updateTime(event.target.value)} />
             </label>
-            <button className="primary-button compact" type="button" onClick={closePicker}>Gata</button>
+            <button className="primary-button compact" type="button" onClick={() => closePicker()}>Gata</button>
           </div>
         </div>
       ) : null}
@@ -1577,12 +1619,16 @@ function EntityForm({
   description,
   fields,
   disabled,
+  submitLabel = 'Salveaza',
+  onCancel,
   onSubmit,
 }: {
   title: string;
   description: string;
   fields: Array<{ label: string; value: string; onChange: (value: string) => void }>;
   disabled: boolean;
+  submitLabel?: string;
+  onCancel?: () => void;
   onSubmit: () => Promise<void>;
 }): JSX.Element {
   return (
@@ -1598,14 +1644,25 @@ function EntityForm({
         {fields.map((field) => (
           <label key={field.label}>
             {field.label}
-            <input value={field.value} onChange={(event) => field.onChange(event.target.value)} />
+            <input
+              value={field.value}
+              onChange={(event) => field.onChange(event.target.value)}
+              disabled={disabled}
+            />
           </label>
         ))}
       </div>
-      <button className="primary-button" type="button" onClick={onSubmit} disabled={disabled}>
-        <CheckCircle2 aria-hidden="true" />
-        <span>Salveaza</span>
-      </button>
+      <div className="form-actions">
+        <button className="primary-button" type="button" onClick={onSubmit} disabled={disabled}>
+          <CheckCircle2 aria-hidden="true" />
+          <span>{submitLabel}</span>
+        </button>
+        {onCancel ? (
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={disabled}>
+            Renunta
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -1614,6 +1671,7 @@ function EntityTable({
   title,
   rows,
   emptyText,
+  onEdit,
   onDelete,
   deleteLabel = 'Sterge',
   disabled = false,
@@ -1621,6 +1679,7 @@ function EntityTable({
   title: string;
   rows: Array<{ id: string; primary: string; secondary: string; meta: string; inactive?: boolean }>;
   emptyText: string;
+  onEdit?: (id: string) => void;
   onDelete?: (id: string) => Promise<void>;
   deleteLabel?: string;
   disabled?: boolean;
@@ -1637,23 +1696,39 @@ function EntityTable({
       {rows.length ? (
         <div className="entity-list">
           {rows.map((row) => (
-            <div className={`entity-row ${onDelete ? 'with-action' : ''}`} key={row.id}>
+            <div className={`entity-row ${onEdit || onDelete ? 'with-action' : ''}`} key={row.id}>
               <div className="entity-row-content">
                 <strong>{row.primary}</strong>
                 <span>{row.secondary}</span>
                 <small>{row.meta}</small>
               </div>
-              {onDelete ? (
-                <button
-                  className="danger-button"
-                  type="button"
-                  onClick={() => void onDelete(row.id)}
-                  disabled={disabled || row.inactive}
-                  title={row.inactive ? 'Inregistrarea este deja inactiva.' : deleteLabel}
-                >
-                  <Trash2 aria-hidden="true" />
-                  <span>{row.inactive ? 'Inactiv' : deleteLabel}</span>
-                </button>
+              {onEdit || onDelete ? (
+                <div className="entity-actions">
+                  {onEdit ? (
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={() => onEdit(row.id)}
+                      disabled={disabled || row.inactive}
+                      title={row.inactive ? 'Curierul este inactiv.' : 'Editeaza curierul'}
+                    >
+                      <Pencil aria-hidden="true" />
+                      <span>Editeaza</span>
+                    </button>
+                  ) : null}
+                  {onDelete ? (
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onDelete(row.id)}
+                      disabled={disabled || row.inactive}
+                      title={row.inactive ? 'Inregistrarea este deja inactiva.' : deleteLabel}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      <span>{row.inactive ? 'Inactiv' : deleteLabel}</span>
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ))}
@@ -1852,7 +1927,7 @@ function ReportResults({
         <ResultTabButton label="Livratori" active={activeTab === 'couriers'} onClick={() => setActiveTab('couriers')} />
         <ResultTabButton label="Restaurante" active={activeTab === 'restaurants'} onClick={() => setActiveTab('restaurants')} />
         <ResultTabButton label="Pe zile" active={activeTab === 'daily'} onClick={() => setActiveTab('daily')} />
-        <ResultTabButton label="Noapte si exterior" active={activeTab === 'night'} onClick={() => setActiveTab('night')} />
+        <ResultTabButton label="Noapte si comenzi speciale" active={activeTab === 'night'} onClick={() => setActiveTab('night')} />
         <ResultTabButton label="Timpi livrare" active={activeTab === 'times'} onClick={() => setActiveTab('times')} />
         <ResultTabButton label="Ore lucrate" active={activeTab === 'workHours'} onClick={() => setActiveTab('workHours')} />
         <ResultTabButton label={`Review (${report.reviewRows.length})`} active={activeTab === 'review'} onClick={() => setActiveTab('review')} />
@@ -1902,11 +1977,11 @@ function ReportResults({
           <div className="panel-heading">
             <MapPin aria-hidden="true" />
             <div>
-              <h2>Noapte si exterior</h2>
-              <p>Comenzi speciale separate pe zi/noapte, zone si exterior.</p>
+              <h2>Noapte si comenzi speciale</h2>
+              <p>Comenzi speciale separate pe zi/noapte, inclusiv valorile in lei sau kilometri.</p>
             </div>
           </div>
-          {report.summaries.length ? <NightExternalTable report={report} /> : <EmptyState text="Nu exista totaluri de noapte sau exterior." />}
+          {report.summaries.length ? <NightExternalTable report={report} /> : <EmptyState text="Nu exista totaluri de noapte sau comenzi speciale." />}
         </section>
       ) : null}
 
@@ -1981,7 +2056,7 @@ function SummaryTable({ report }: { report: ScanReport }): JSX.Element {
       <table>
         <thead>
           <tr>
-            <th>Curier</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Ext. zi</th><th>Lei ext. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>N ext.</th><th>N lei ext.</th><th>Ridicat</th><th>Livrat</th><th>Timp mediu</th><th>Ore</th><th>Dif</th><th>Review</th>
+            <th>Curier</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Spec. zi</th><th>Lei spec. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp mediu</th><th>Ore</th><th>Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2020,7 +2095,7 @@ function NightExternalTable({ report }: { report: ScanReport }): JSX.Element {
       <table>
         <thead>
           <tr>
-            <th>Curier</th><th>Ext. zi</th><th>Lei ext. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>N ext.</th><th>N lei ext.</th><th>Dif</th><th>Review</th>
+            <th>Curier</th><th>Spec. zi</th><th>Lei spec. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th>Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2076,7 +2151,7 @@ function RestaurantTable({ report }: { report: ScanReport }): JSX.Element {
       <table>
         <thead>
           <tr>
-            <th>Restaurant</th><th>Curieri</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Ext. zi</th><th>Lei ext. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>N ext.</th><th>N lei ext.</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Dif</th><th>Review</th>
+            <th>Restaurant</th><th>Curieri</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th>Lei speciale zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th>Lei speciale noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2128,7 +2203,7 @@ function DailyCourierTable({ rows }: { rows: DailyCourierSummary[] }): JSX.Eleme
               <div className="table-wrap compact-table">
                 <table>
                   <thead>
-                    <tr><th>Livrator</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Ext. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>N ext.</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Rev</th></tr>
+                    <tr><th>Livrator</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Rev</th></tr>
                   </thead>
                   <tbody>
                     {restaurant.rows.map((row) => (
@@ -2510,6 +2585,7 @@ function buildReportWorkbook(
   if (options.scope === 'full' || options.scope === 'restaurants') {
     addRestaurantsSheet(workbook, report);
     addDailySheet(workbook, report);
+    addWeeklyCompatibilitySheet(workbook, report);
     if (options.scope === 'full') {
       addRestaurantProfessionalSheets(workbook, report);
     }
@@ -2729,16 +2805,16 @@ function addGlobalSheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
     { header: 'Z1 zi', key: 'z1', width: 8 },
     { header: 'Z2 zi', key: 'z2', width: 8 },
     { header: 'Z3 zi', key: 'z3', width: 8 },
-    { header: 'Exterior zi', key: 'outsideCount', width: 12 },
-    { header: 'Km exterior zi', key: 'km', width: 14 },
-    { header: 'Lei exterior zi', key: 'lei', width: 15 },
+    { header: 'Comenzi speciale zi', key: 'outsideCount', width: 20 },
+    { header: 'Km comenzi speciale zi', key: 'km', width: 22 },
+    { header: 'Lei comenzi speciale zi', key: 'lei', width: 22 },
     { header: 'Total noapte', key: 'night', width: 14 },
     { header: 'N Z1', key: 'nightZ1', width: 8 },
     { header: 'N Z2', key: 'nightZ2', width: 8 },
     { header: 'N Z3', key: 'nightZ3', width: 8 },
-    { header: 'N exterior', key: 'nightOutsideCount', width: 12 },
-    { header: 'N km ext.', key: 'nightKm', width: 12 },
-    { header: 'N lei ext.', key: 'nightLei', width: 12 },
+    { header: 'Comenzi speciale noapte', key: 'nightOutsideCount', width: 23 },
+    { header: 'Km speciale noapte', key: 'nightKm', width: 19 },
+    { header: 'Lei speciale noapte', key: 'nightLei', width: 19 },
     { header: 'Ridicat', key: 'pickedAudit', width: 12 },
     { header: 'Livrat', key: 'deliveredAudit', width: 12 },
     { header: 'Diferenta', key: 'diff', width: 12 },
@@ -2785,16 +2861,16 @@ function addRestaurantsSheet(workbook: ExcelJS.Workbook, report: ScanReport): vo
     { header: 'Z1 zi', key: 'z1', width: 8 },
     { header: 'Z2 zi', key: 'z2', width: 8 },
     { header: 'Z3 zi', key: 'z3', width: 8 },
-    { header: 'Exterior zi', key: 'outsideCount', width: 12 },
-    { header: 'Km exterior zi', key: 'km', width: 14 },
-    { header: 'Lei exterior zi', key: 'lei', width: 15 },
+    { header: 'Comenzi speciale zi', key: 'outsideCount', width: 20 },
+    { header: 'Km comenzi speciale zi', key: 'km', width: 22 },
+    { header: 'Lei comenzi speciale zi', key: 'lei', width: 22 },
     { header: 'Total noapte', key: 'night', width: 14 },
     { header: 'N Z1', key: 'nightZ1', width: 8 },
     { header: 'N Z2', key: 'nightZ2', width: 8 },
     { header: 'N Z3', key: 'nightZ3', width: 8 },
-    { header: 'N exterior', key: 'nightOutsideCount', width: 12 },
-    { header: 'N km ext.', key: 'nightKm', width: 12 },
-    { header: 'N lei ext.', key: 'nightLei', width: 12 },
+    { header: 'Comenzi speciale noapte', key: 'nightOutsideCount', width: 23 },
+    { header: 'Km speciale noapte', key: 'nightKm', width: 19 },
+    { header: 'Lei speciale noapte', key: 'nightLei', width: 19 },
     { header: 'Ridicat', key: 'pickedAudit', width: 12 },
     { header: 'Livrat', key: 'deliveredAudit', width: 12 },
     { header: 'Diferenta', key: 'diff', width: 12 },
@@ -2841,14 +2917,14 @@ function addDailySheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
     { header: 'Z1 zi', key: 'z1', width: 8 },
     { header: 'Z2 zi', key: 'z2', width: 8 },
     { header: 'Z3 zi', key: 'z3', width: 8 },
-    { header: 'Exterior zi', key: 'outsideCount', width: 12 },
-    { header: 'Exterior zi', key: 'outside', width: 16 },
+    { header: 'Comenzi speciale zi', key: 'outsideCount', width: 20 },
+    { header: 'Valoare speciala zi', key: 'outside', width: 18 },
     { header: 'Total noapte', key: 'night', width: 14 },
     { header: 'N Z1', key: 'nightZ1', width: 8 },
     { header: 'N Z2', key: 'nightZ2', width: 8 },
     { header: 'N Z3', key: 'nightZ3', width: 8 },
-    { header: 'N exterior', key: 'nightOutsideCount', width: 12 },
-    { header: 'N exterior', key: 'nightOutside', width: 16 },
+    { header: 'Comenzi speciale noapte', key: 'nightOutsideCount', width: 23 },
+    { header: 'Valoare speciala noapte', key: 'nightOutside', width: 23 },
     { header: 'Ridicat', key: 'pickedAudit', width: 12 },
     { header: 'Livrat', key: 'deliveredAudit', width: 12 },
     { header: 'Diferenta', key: 'diff', width: 12 },
@@ -2884,22 +2960,71 @@ function addDailySheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
   styleWorksheet(sheet, 1, report.dailyCourierSummaries.length + 1);
 }
 
+function addWeeklyCompatibilitySheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
+  const sheet = workbook.addWorksheet('EXPORT_SAPTAMANAL', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
+  sheet.columns = [
+    { header: 'Data', key: 'date', width: 14 },
+    { header: 'Ziua', key: 'weekday', width: 14 },
+    { header: 'Restaurant', key: 'restaurant', width: 30 },
+    { header: 'Livrator', key: 'courier', width: 30 },
+    { header: 'Zona 1', key: 'zone1', width: 11 },
+    { header: 'Zona 2', key: 'zone2', width: 11 },
+    { header: 'Zona 3', key: 'zone3', width: 11 },
+    { header: 'Comenzi\nNoapte\n( toate zonele )', key: 'night', width: 18 },
+    { header: 'Total Comenzi', key: 'total', width: 16 },
+    { header: 'Venit\n( Comenzi Noapte )', key: 'nightRevenue', width: 20 },
+    { header: 'Total Venit\n( cash / facturat )', key: 'totalRevenue', width: 22 },
+  ];
+
+  for (const row of sortDailyRows(report.dailyCourierSummaries)) {
+    const date = new Date(`${row.dayKey}T12:00:00`);
+    const weekday = capitalizeLabel(
+      new Intl.DateTimeFormat('ro-RO', { weekday: 'long' }).format(date),
+    );
+    sheet.addRow([
+      date,
+      weekday,
+      row.restaurantName,
+      row.courierName,
+      row.zoneCounts.zone1,
+      row.zoneCounts.zone2,
+      row.zoneCounts.zone3,
+      row.nightPickedUp,
+      row.pickedUp + row.nightPickedUp,
+      null,
+      null,
+    ]);
+  }
+
+  sheet.getColumn(1).numFmt = 'dd.mm.yyyy';
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: Math.max(1, report.dailyCourierSummaries.length + 1), column: 11 },
+  };
+  sheet.getCell('J1').note = 'Coloana de import ramane libera; venitul se calculeaza cu tarifele aprobate in fisierul salarial al clientului.';
+  sheet.getCell('K1').note = 'Coloana de import ramane libera; totalul salarial se calculeaza in fisierul clientului.';
+  sheet.getRow(1).height = 48;
+  styleWorksheet(sheet, 1, report.dailyCourierSummaries.length + 1);
+}
+
 function addZonesSheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
-  const sheet = workbook.addWorksheet('Zone si exterior', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const sheet = workbook.addWorksheet('Zone si comenzi speciale', { views: [{ state: 'frozen', ySplit: 1 }] });
   sheet.columns = [
     { header: 'Curier', key: 'courier', width: 28 },
     { header: 'Z1 zi', key: 'z1', width: 10 },
     { header: 'Z2 zi', key: 'z2', width: 10 },
     { header: 'Z3 zi', key: 'z3', width: 10 },
-    { header: 'Exterior zi', key: 'outsideCount', width: 12 },
-    { header: 'Km exterior zi', key: 'km', width: 14 },
-    { header: 'Lei exterior zi', key: 'lei', width: 14 },
+    { header: 'Comenzi speciale zi', key: 'outsideCount', width: 20 },
+    { header: 'Km comenzi speciale zi', key: 'km', width: 22 },
+    { header: 'Lei comenzi speciale zi', key: 'lei', width: 22 },
     { header: 'N Z1', key: 'nightZ1', width: 10 },
     { header: 'N Z2', key: 'nightZ2', width: 10 },
     { header: 'N Z3', key: 'nightZ3', width: 10 },
-    { header: 'N exterior', key: 'nightOutsideCount', width: 12 },
-    { header: 'N km ext.', key: 'nightKm', width: 14 },
-    { header: 'N lei ext.', key: 'nightLei', width: 14 },
+    { header: 'Comenzi speciale noapte', key: 'nightOutsideCount', width: 23 },
+    { header: 'Km speciale noapte', key: 'nightKm', width: 19 },
+    { header: 'Lei speciale noapte', key: 'nightLei', width: 19 },
   ];
   for (const row of report.summaries) {
     sheet.addRow([
@@ -2930,9 +3055,9 @@ function addNightSheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
     { header: 'N Z1', key: 'z1', width: 10 },
     { header: 'N Z2', key: 'z2', width: 10 },
     { header: 'N Z3', key: 'z3', width: 10 },
-    { header: 'N exterior', key: 'outsideCount', width: 12 },
-    { header: 'N km ext.', key: 'km', width: 12 },
-    { header: 'N lei ext.', key: 'lei', width: 12 },
+    { header: 'Comenzi speciale noapte', key: 'outsideCount', width: 23 },
+    { header: 'Km speciale noapte', key: 'km', width: 19 },
+    { header: 'Lei speciale noapte', key: 'lei', width: 19 },
     { header: 'Diferenta', key: 'diff', width: 12 },
   ];
   for (const row of report.summaries) {
@@ -3063,12 +3188,12 @@ function addProfessionalHeaderRow(sheet: ExcelJS.Worksheet, rowNumber: number): 
     'Z1 zi',
     'Z2 zi',
     'Z3 zi',
-    'Exterior zi',
+    'Speciale zi',
     'Total noapte',
     'N Z1',
     'N Z2',
     'N Z3',
-    'N exterior',
+    'Speciale noapte',
     'Ridicat',
     'Livrat',
     'Timp',

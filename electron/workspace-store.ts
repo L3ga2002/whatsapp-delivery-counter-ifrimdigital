@@ -226,16 +226,36 @@ export class WorkspaceStore {
   async saveCourier(input: CourierInput): Promise<Courier> {
     const now = new Date().toISOString();
     const existing = input.id ? this.getCourier(input.id) : null;
+    const name = sanitizeRequired(input.name, 'Numele curierului este obligatoriu.');
+    const suppliedAliases = input.aliases ?? existing?.aliases ?? [];
+    const aliases = cleanList([
+      ...suppliedAliases,
+      ...(existing && normalizeCourierIdentity(existing.name) !== normalizeCourierIdentity(name)
+        ? [existing.name]
+        : []),
+    ]);
     const courier: Courier = {
       id: existing?.id ?? input.id ?? randomUUID(),
-      name: sanitizeRequired(input.name, 'Numele curierului este obligatoriu.'),
+      name,
       phone: input.phone?.trim() ?? existing?.phone ?? '',
-      aliases: cleanList(input.aliases ?? existing?.aliases ?? []),
+      aliases,
       isActive: input.isActive ?? existing?.isActive ?? true,
       notes: input.notes?.trim() ?? existing?.notes ?? '',
       createdAtIso: existing?.createdAtIso ?? now,
       updatedAtIso: now,
     };
+    const previousAliases = existing
+      ? [existing.phone, ...existing.aliases].map(normalizeCourierIdentity).filter(Boolean).sort()
+      : [];
+    const nextAliases = [courier.phone, ...courier.aliases]
+      .map(normalizeCourierIdentity)
+      .filter(Boolean)
+      .sort();
+    const identityChanged = existing
+      ? existing.name !== courier.name
+        || existing.isActive !== courier.isActive
+        || previousAliases.join('\u0000') !== nextAliases.join('\u0000')
+      : nextAliases.length > 0;
 
     const requestedIdentities = new Set(
       [courier.phone, ...courier.aliases]
@@ -267,6 +287,14 @@ export class WorkspaceStore {
         courier.updatedAtIso,
       ],
     );
+    if (identityChanged) {
+      this.run(
+        `update reports
+         set status = 'draft', scanned_at_iso = null, updated_at_iso = ?
+         where status in ('scanned', 'exported')`,
+        [now],
+      );
+    }
     await this.save();
     return courier;
   }
