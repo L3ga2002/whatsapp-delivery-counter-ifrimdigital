@@ -19,6 +19,13 @@ async function createStore(): Promise<WorkspaceStore> {
 }
 
 describe('WorkspaceStore legacy courier aliases', () => {
+  it('keeps the salary report disabled until the operator explicitly configures it', async () => {
+    const store = await createStore();
+
+    expect(store.getSettings().payroll.enabled).toBe(false);
+    expect(store.getSettings().payroll.zoneRates.zone1.dayCash).toBe(14);
+  });
+
   it('migrates legacy phone aliases into SQLite once and keeps Romanian phone matching available', async () => {
     const store = await createStore();
 

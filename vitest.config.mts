@@ -2,6 +2,6 @@ import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, 'dist/**', 'dist-electron/**', 'release/**'],
+    exclude: [...configDefaults.exclude, '.ifrim/**', 'dist/**', 'dist-electron/**', 'release/**'],
   },
 });

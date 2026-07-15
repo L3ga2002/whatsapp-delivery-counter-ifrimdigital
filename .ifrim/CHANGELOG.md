@@ -1,5 +1,14 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-15 - v0.3.14
+
+- Added an opt-in final salary workbook modeled on the client's XLSM calculations, using standard Excel formulas without requiring macros.
+- Added persistent Z1/Z2/Z3 day/night tariffs, restaurant payment methods, courier commission/tax rules, and restaurant-courier overrides.
+- Added a professional `Raport salarial` summary, restaurant worksheets, visible salary warnings, and hidden calculation/audit sheets.
+- Separated gross commission, the client's global commission adjustment, and net team commission so totals remain auditable.
+- Improved narrow-window salary settings with local field labels and locked the full form while settings are saved.
+- Expanded payroll and workbook regression coverage, including explicit activation and the client's `DOAR CASH` rule.
+
 ## 2026-07-15 - v0.3.13
 
 - Added explicit mapping from sender identities detected in imported WhatsApp conversations to saved couriers, covering exports that contain a contact name but no phone number.

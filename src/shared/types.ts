@@ -275,6 +275,38 @@ export interface AppSettings {
   maxWorkSessionHours: number;
   defaultExportScope: ExportScope;
   importRetentionDays: number;
+  payroll: PayrollSettings;
+}
+
+export type PayrollPaymentMethod = 'cash' | 'cashPaid' | 'invoiced';
+
+export type PayrollCalculationMode = 'all' | 'cashOnly';
+
+export interface PayrollZoneRate {
+  dayCash: number;
+  dayInvoiced: number;
+  nightCash: number;
+  nightInvoiced: number;
+}
+
+export interface PayrollCourierRule {
+  calculationMode: PayrollCalculationMode;
+  commissionPerOrder: number;
+  taxRate: number;
+  invoiceCommissionPerOrder: number;
+}
+
+export interface PayrollSettings {
+  enabled: boolean;
+  zoneRates: {
+    zone1: PayrollZoneRate;
+    zone2: PayrollZoneRate;
+    zone3: PayrollZoneRate;
+  };
+  restaurantMethods: Record<string, PayrollPaymentMethod>;
+  courierRules: Record<string, PayrollCourierRule>;
+  restaurantCourierOverrides: Record<string, PayrollPaymentMethod>;
+  commissionAdjustmentLei: number;
 }
 
 export interface ParserVersion {

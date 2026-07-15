@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js';
 import { normalizeCourierIdentity } from '../src/shared/parser';
+import { defaultPayrollSettings, mergePayrollSettings } from '../src/shared/payroll';
 import {
   PARSER_VERSION,
   type AliasMap,
@@ -36,6 +37,7 @@ const defaultSettings: AppSettings = {
   maxWorkSessionHours: 18,
   defaultExportScope: 'full',
   importRetentionDays: 30,
+  payroll: defaultPayrollSettings,
 };
 
 export class WorkspaceStore {
@@ -142,9 +144,11 @@ export class WorkspaceStore {
   }
 
   getSettings(): AppSettings {
+    const saved = this.getSetting<Partial<AppSettings>>('settings', defaultSettings);
     return {
       ...defaultSettings,
-      ...this.getSetting<Partial<AppSettings>>('settings', defaultSettings),
+      ...saved,
+      payroll: sanitizePayrollSettings(saved.payroll),
     };
   }
 
@@ -155,6 +159,7 @@ export class WorkspaceStore {
       maxWorkSessionHours: clampInteger(input.maxWorkSessionHours, 1, 24, defaultSettings.maxWorkSessionHours),
       defaultExportScope: input.defaultExportScope ?? defaultSettings.defaultExportScope,
       importRetentionDays: clampInteger(input.importRetentionDays, 1, 365, defaultSettings.importRetentionDays),
+      payroll: sanitizePayrollSettings(input.payroll),
     };
     this.setSetting('settings', settings);
     await this.save();
@@ -918,6 +923,48 @@ function clampInteger(value: number, min: number, max: number, fallback: number)
     return fallback;
   }
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function sanitizePayrollSettings(input: AppSettings['payroll'] | undefined): AppSettings['payroll'] {
+  const merged = mergePayrollSettings(input);
+  const sanitizeZone = (zone: typeof merged.zoneRates.zone1) => ({
+    dayCash: clampNumber(zone.dayCash, 0, 10_000, 0),
+    dayInvoiced: clampNumber(zone.dayInvoiced, 0, 10_000, 0),
+    nightCash: clampNumber(zone.nightCash, 0, 10_000, 0),
+    nightInvoiced: clampNumber(zone.nightInvoiced, 0, 10_000, 0),
+  });
+  return {
+    ...merged,
+    enabled: Boolean(merged.enabled),
+    zoneRates: {
+      zone1: sanitizeZone(merged.zoneRates.zone1),
+      zone2: sanitizeZone(merged.zoneRates.zone2),
+      zone3: sanitizeZone(merged.zoneRates.zone3),
+    },
+    restaurantMethods: Object.fromEntries(
+      Object.entries(merged.restaurantMethods).filter(([, method]) =>
+        method === 'cash' || method === 'cashPaid' || method === 'invoiced'),
+    ),
+    courierRules: Object.fromEntries(Object.entries(merged.courierRules).map(([courierId, rule]) => [
+      courierId,
+      {
+        calculationMode: rule.calculationMode === 'cashOnly' ? 'cashOnly' : 'all',
+        commissionPerOrder: clampNumber(rule.commissionPerOrder, 0, 10_000, 0),
+        taxRate: clampNumber(rule.taxRate, 0, 1, 0),
+        invoiceCommissionPerOrder: clampNumber(rule.invoiceCommissionPerOrder, 0, 10_000, 0),
+      },
+    ])),
+    restaurantCourierOverrides: Object.fromEntries(
+      Object.entries(merged.restaurantCourierOverrides).filter(([, method]) =>
+        method === 'cash' || method === 'cashPaid' || method === 'invoiced'),
+    ),
+    commissionAdjustmentLei: clampNumber(merged.commissionAdjustmentLei, 0, 100_000, 80),
+  };
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
 }
 
 function cleanList(values: string[]): string[] {

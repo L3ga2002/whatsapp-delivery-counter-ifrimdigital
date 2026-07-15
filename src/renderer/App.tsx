@@ -33,12 +33,21 @@ import type {
   ReportImportRole,
   Restaurant,
   RestaurantInput,
+  PayrollCalculationMode,
+  PayrollPaymentMethod,
   ReviewRow,
   ScanOptions,
   ScanReport,
   WorkspaceSnapshot,
 } from '../shared/types';
 import { collectDetectedCourierIdentities } from '../shared/courier-identities';
+import {
+  buildPayrollResult,
+  fromBani,
+  mergePayrollSettings,
+  resolveCourierRule,
+  resolveRestaurantMethod,
+} from '../shared/payroll';
 
 const uiOperationWatchdogMs = 120_000;
 const workspaceReloadTimeoutMs = 30_000;
@@ -554,12 +563,27 @@ export default function App(): JSX.Element {
     if (!report || !workspace) {
       return;
     }
+    const effectiveOptions = overrideOptions ?? exportOptions;
+    if ((effectiveOptions.scope === 'full' || effectiveOptions.scope === 'restaurants') && !workspace.settings.payroll.enabled) {
+      setActiveView('settings');
+      setNotice({
+        kind: 'info',
+        text: 'Activeaza si salveaza raportul salarial din Setari dupa ce verifici tarifele si regulile de plata.',
+      });
+      return;
+    }
     setIsExporting(true);
     try {
-      const effectiveOptions = overrideOptions ?? exportOptions;
       const { default: excel } = await import('exceljs');
       const scopedReport = createScopedReport(report, effectiveOptions, workspace.restaurants);
-      const workbook = buildReportWorkbook(scopedReport, excel, effectiveOptions, workspace.restaurants);
+      const workbook = buildReportWorkbook(
+        scopedReport,
+        excel,
+        effectiveOptions,
+        workspace.restaurants,
+        workspace.couriers,
+        workspace.settings,
+      );
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1488,7 +1512,7 @@ function ReportsView({
               </div>
               <button className="primary-button" type="button" onClick={() => onExport({ scope: 'full', restaurantIds: [] })} disabled={isExporting}>
                 {isExporting ? <Loader2 className="spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
-                <span>Descarca foile restaurantelor</span>
+                <span>Descarca raportul salarial</span>
               </button>
             </div>
             <div className="quick-export-grid">
@@ -1565,6 +1589,11 @@ function SettingsView({
   isBusy: boolean;
 }): JSX.Element {
   const [retentionDays, setRetentionDays] = useState(String(workspace.settings.importRetentionDays));
+  const [payrollSettings, setPayrollSettings] = useState(() => mergePayrollSettings(workspace.settings.payroll));
+  const [overrideRestaurantId, setOverrideRestaurantId] = useState('');
+  const [overrideCourierId, setOverrideCourierId] = useState('');
+  const [overrideMethod, setOverrideMethod] = useState<PayrollPaymentMethod>('cash');
+  const [isSavingPayroll, setIsSavingPayroll] = useState(false);
   const parsedRetentionDays = Number.parseInt(retentionDays, 10);
   const safeRetentionDays = Number.isFinite(parsedRetentionDays)
     ? Math.min(365, Math.max(1, parsedRetentionDays))
@@ -1573,6 +1602,20 @@ function SettingsView({
   useEffect(() => {
     setRetentionDays(String(workspace.settings.importRetentionDays));
   }, [workspace.settings.importRetentionDays]);
+
+  useEffect(() => {
+    setPayrollSettings(mergePayrollSettings(workspace.settings.payroll));
+  }, [workspace.settings.payroll]);
+
+  const savePayrollSettings = async (): Promise<void> => {
+    if (isSavingPayroll || isBusy) return;
+    setIsSavingPayroll(true);
+    try {
+      await onSaveSettings({ ...workspace.settings, payroll: payrollSettings });
+    } finally {
+      setIsSavingPayroll(false);
+    }
+  };
 
   return (
     <div className="view-stack">
@@ -1594,6 +1637,164 @@ function SettingsView({
         {workspace.maintenanceNotices.map((message) => (
           <div className="notice warning" key={message}>{message}</div>
         ))}
+      </section>
+      <section className="panel payroll-settings-panel">
+        <div className="panel-heading">
+          <FileArchive aria-hidden="true" />
+          <div>
+            <h2>Setari raport salarial</h2>
+            <p>Tarifele si regulile sunt salvate local si sunt folosite in formulele raportului Excel final.</p>
+          </div>
+        </div>
+        <fieldset className="payroll-settings-fieldset" disabled={isSavingPayroll || isBusy}>
+        <label className="payroll-enable-row">
+          <input
+            type="checkbox"
+            checked={payrollSettings.enabled}
+            onChange={(event) => setPayrollSettings((current) => ({ ...current, enabled: event.target.checked }))}
+          />
+          <span>
+            <strong>Activeaza raportul salarial final</strong>
+            <small>Activeaza numai dupa ce verifici tarifele, metodele restaurantelor si regulile curierilor.</small>
+          </span>
+        </label>
+        <details open>
+          <summary>Tarife Z1, Z2, Z3</summary>
+          <div className="payroll-rate-grid payroll-rate-header" aria-hidden="true">
+            <strong>Zona</strong><strong>Zi cash</strong><strong>Zi facturat</strong><strong>Noapte cash</strong><strong>Noapte facturat</strong>
+          </div>
+          {(['zone1', 'zone2', 'zone3'] as const).map((zoneKey, zoneIndex) => (
+            <div className="payroll-rate-grid" key={zoneKey}>
+              <strong>Z{zoneIndex + 1}</strong>
+              {(['dayCash', 'dayInvoiced', 'nightCash', 'nightInvoiced'] as const).map((rateKey) => (
+                <label key={rateKey}>
+                  <span className="payroll-field-label">{payrollRateLabel(rateKey)}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={payrollSettings.zoneRates[zoneKey][rateKey]}
+                    onChange={(event) => setPayrollSettings((current) => ({
+                      ...current,
+                      zoneRates: {
+                        ...current.zoneRates,
+                        [zoneKey]: {
+                          ...current.zoneRates[zoneKey],
+                          [rateKey]: safeInputNumber(event.target.value),
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+              ))}
+            </div>
+          ))}
+        </details>
+        <details>
+          <summary>Metoda de plata pe restaurant</summary>
+          <div className="payroll-rule-list">
+            {workspace.restaurants.filter((restaurant) => restaurant.isActive).map((restaurant) => {
+              const resolved = resolveRestaurantMethod(payrollSettings, restaurant);
+              return (
+                <label className="payroll-rule-row" key={restaurant.id}>
+                  <span>{restaurant.name}</span>
+                  <select
+                    value={payrollSettings.restaurantMethods[restaurant.id] ?? resolved.method}
+                    onChange={(event) => setPayrollSettings((current) => ({
+                      ...current,
+                      restaurantMethods: {
+                        ...current.restaurantMethods,
+                        [restaurant.id]: event.target.value as PayrollPaymentMethod,
+                      },
+                    }))}
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="cashPaid">Cash achitat</option>
+                    <option value="invoiced">Facturat</option>
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        </details>
+        <details>
+          <summary>Calcul pe curier</summary>
+          <div className="payroll-courier-header" aria-hidden="true">
+            <strong>Curier</strong><strong>Tip calcul</strong><strong>Comision RON/com.</strong><strong>Taxe</strong><strong>Comision factura</strong>
+          </div>
+          <div className="payroll-rule-list">
+            {workspace.couriers.filter((courier) => courier.isActive).map((courier) => {
+              const rule = payrollSettings.courierRules[courier.id] ?? resolveCourierRule(payrollSettings, courier);
+              const updateRule = (patch: Partial<typeof rule>): void => setPayrollSettings((current) => ({
+                ...current,
+                courierRules: { ...current.courierRules, [courier.id]: { ...rule, ...patch } },
+              }));
+              return (
+                <div className="payroll-courier-row" key={courier.id}>
+                  <strong>{courier.name}</strong>
+                  <label><span className="payroll-field-label">Tip calcul</span><select value={rule.calculationMode} onChange={(event) => updateRule({ calculationMode: event.target.value as PayrollCalculationMode })}>
+                    <option value="all">Toate</option>
+                    <option value="cashOnly">Doar cash</option>
+                  </select></label>
+                  <label><span className="payroll-field-label">Comision RON/com.</span><input type="number" min="0" step="0.1" value={rule.commissionPerOrder} onChange={(event) => updateRule({ commissionPerOrder: safeInputNumber(event.target.value) })} /></label>
+                  <label><span className="payroll-field-label">Taxe %</span><input type="number" min="0" max="100" step="1" value={Math.round(rule.taxRate * 100)} onChange={(event) => updateRule({ taxRate: safeInputNumber(event.target.value) / 100 })} /></label>
+                  <label><span className="payroll-field-label">Comision factura</span><input type="number" min="0" step="0.1" value={rule.invoiceCommissionPerOrder} onChange={(event) => updateRule({ invoiceCommissionPerOrder: safeInputNumber(event.target.value) })} /></label>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+        <details>
+          <summary>Exceptii restaurant + curier</summary>
+          <div className="payroll-override-form">
+            <select value={overrideRestaurantId} onChange={(event) => setOverrideRestaurantId(event.target.value)}>
+              <option value="">Alege restaurant</option>
+              {workspace.restaurants.filter((item) => item.isActive).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+            </select>
+            <select value={overrideCourierId} onChange={(event) => setOverrideCourierId(event.target.value)}>
+              <option value="">Alege curier</option>
+              {workspace.couriers.filter((item) => item.isActive).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+            </select>
+            <select value={overrideMethod} onChange={(event) => setOverrideMethod(event.target.value as PayrollPaymentMethod)}>
+              <option value="cash">Cash</option><option value="cashPaid">Cash achitat</option><option value="invoiced">Facturat</option>
+            </select>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!overrideRestaurantId || !overrideCourierId}
+              onClick={() => setPayrollSettings((current) => ({
+                ...current,
+                restaurantCourierOverrides: {
+                  ...current.restaurantCourierOverrides,
+                  [`${overrideRestaurantId}:${overrideCourierId}`]: overrideMethod,
+                },
+              }))}
+            >Adauga exceptie</button>
+          </div>
+          <div className="payroll-override-list">
+            {Object.entries(payrollSettings.restaurantCourierOverrides).map(([key, method]) => {
+              const [restaurantId, courierId] = key.split(':');
+              return (
+                <div key={key}>
+                  <span>{workspace.restaurants.find((item) => item.id === restaurantId)?.name ?? restaurantId} / {workspace.couriers.find((item) => item.id === courierId)?.name ?? courierId}: {payrollMethodLabel(method)}</span>
+                  <button className="danger-button icon-button" type="button" title="Sterge exceptia" onClick={() => setPayrollSettings((current) => {
+                    const next = { ...current.restaurantCourierOverrides };
+                    delete next[key];
+                    return { ...current, restaurantCourierOverrides: next };
+                  })}><Trash2 aria-hidden="true" /></button>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+        <div className="payroll-save-row">
+          <label>Ajustare total comision (RON)<input type="number" min="0" step="1" value={payrollSettings.commissionAdjustmentLei} onChange={(event) => setPayrollSettings((current) => ({ ...current, commissionAdjustmentLei: safeInputNumber(event.target.value) }))} /></label>
+          <button className="primary-button" type="button" onClick={() => void savePayrollSettings()} disabled={isSavingPayroll || isBusy}>
+            {isSavingPayroll ? <Loader2 className="spin" aria-hidden="true" /> : null}
+            <span>{isSavingPayroll ? 'Se salveaza...' : 'Salveaza setarile salariale'}</span>
+          </button>
+        </div>
+        </fieldset>
       </section>
       <section className="panel">
         <div className="panel-heading">
@@ -2686,14 +2887,34 @@ export function buildReportWorkbook(
   report: ScanReport,
   excel: typeof ExcelJS,
   options: ExportOptions,
-  _restaurants: Restaurant[],
+  restaurants: Restaurant[],
+  couriers: Courier[] = [],
+  settings?: AppSettings,
 ): ExcelJS.Workbook {
   const workbook = new excel.Workbook();
   workbook.creator = 'IfrimDigital';
   workbook.created = new Date();
+  workbook.calcProperties.fullCalcOnLoad = true;
+
+  const effectiveSettings: AppSettings = settings ?? {
+    nightStartHour: 23,
+    nightEndHour: 4,
+    maxWorkSessionHours: 18,
+    defaultExportScope: 'full',
+    importRetentionDays: 30,
+    payroll: mergePayrollSettings(),
+  };
+  const payroll = buildPayrollResult(report, effectiveSettings, restaurants, couriers);
 
   if (options.scope === 'full' || options.scope === 'restaurants') {
-    addRestaurantProfessionalSheets(workbook, report);
+    if (!effectiveSettings.payroll.enabled) {
+      throw new Error('Raportul salarial nu este activat. Verifica si salveaza setarile salariale inainte de export.');
+    }
+    addPayrollSummarySheet(workbook, report, payroll, effectiveSettings);
+    addRestaurantProfessionalSheets(workbook, report, payroll.lines);
+    addPayrollWarningsSheet(workbook, payroll.warnings, payroll.lines);
+    addPayrollDataSheet(workbook, payroll.lines);
+    addPayrollSettingsSheet(workbook, restaurants, couriers, effectiveSettings);
   } else if (options.scope === 'global') {
     addGlobalSheet(workbook, report);
   } else if (options.scope === 'workHours') {
@@ -2709,33 +2930,202 @@ export function buildReportWorkbook(
   return workbook;
 }
 
+function addPayrollSummarySheet(
+  workbook: ExcelJS.Workbook,
+  report: ScanReport,
+  payroll: ReturnType<typeof buildPayrollResult>,
+  settings: AppSettings,
+): void {
+  const sheet = workbook.addWorksheet('Raport salarial', { views: [{ state: 'frozen', ySplit: 4 }] });
+  sheet.columns = [
+    { width: 30 }, { width: 13 }, { width: 13 }, { width: 17 }, { width: 15 }, { width: 15 },
+    { width: 16 }, { width: 17 }, { width: 16 }, { width: 11 }, { width: 16 }, { width: 17 },
+    { width: 10 }, { width: 12 },
+  ];
+  sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+  addMergedRow(sheet, 1, 1, 14, 'IFRIMDIGITAL - Raport salarial final', {
+    font: { bold: true, size: 18, color: { argb: 'FFFFFFFF' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173449' } },
+    alignment: { vertical: 'middle', horizontal: 'left' }, height: 30,
+  });
+  addMergedRow(sheet, 2, 1, 14, `Interval: ${formatDateTime(report.interval.fromIso)} - ${formatDateTime(report.interval.toIso)}`, {
+    font: { bold: true, color: { argb: 'FF173449' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1E5' } },
+    alignment: { vertical: 'middle', horizontal: 'left' }, height: 23,
+  });
+  addMergedRow(sheet, 3, 1, 14, payroll.warnings.length
+    ? `Atentie: ${payroll.warnings.length} configurari sau valori necesita verificare. Vezi foaia Avertizari salariale.`
+    : 'Calcul complet. Formulele raman vizibile si se recalculeaza automat in Excel.', {
+    font: { bold: true, color: { argb: payroll.warnings.length ? 'FF9A4D00' : 'FF0C7B63' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: payroll.warnings.length ? 'FFFFF4DD' : 'FFEAF4F1' } },
+    alignment: { vertical: 'middle', horizontal: 'left' }, height: 23,
+  });
+  const headers = [
+    'Livrator', 'Tip calcul', 'Total comenzi', 'Cash achitat', 'Facturat', 'Cash', 'Total valoare',
+    'Comision RON/com.', 'Valoare comision', 'Taxe %', 'Valoare taxe', 'De incasat', 'Review', 'Avertizari',
+  ];
+  const headerRow = sheet.getRow(4);
+  headerRow.values = headers;
+  headerRow.height = 36;
+  stylePayrollHeader(headerRow);
+  let rowNumber = 5;
+  for (const courier of payroll.couriers) {
+    const row = sheet.getRow(rowNumber);
+    row.values = [
+      courier.courierName,
+      courier.calculationMode === 'all' ? 'TOATE' : 'DOAR CASH',
+      { formula: `SUMIFS('Date calcul'!$G:$G,'Date calcul'!$E:$E,A${rowNumber})`, result: courier.totalOrders },
+      { formula: `SUMIFS('Date calcul'!$J:$J,'Date calcul'!$E:$E,A${rowNumber},'Date calcul'!$F:$F,"cashPaid")`, result: fromBani(courier.cashPaidBani) },
+      { formula: `SUMIFS('Date calcul'!$J:$J,'Date calcul'!$E:$E,A${rowNumber},'Date calcul'!$F:$F,"invoiced")`, result: fromBani(courier.invoicedBani) },
+      { formula: `SUMIFS('Date calcul'!$J:$J,'Date calcul'!$E:$E,A${rowNumber},'Date calcul'!$F:$F,"cash")`, result: fromBani(courier.cashBani) },
+      { formula: `SUM(D${rowNumber}:F${rowNumber})`, result: fromBani(courier.totalValueBani) },
+      fromBani(courier.commissionPerOrderBani),
+      { formula: `C${rowNumber}*H${rowNumber}`, result: fromBani(courier.commissionBani) },
+      courier.taxRate,
+      { formula: `IF(B${rowNumber}="TOATE",MAX(0,(E${rowNumber}+F${rowNumber}-I${rowNumber})*J${rowNumber}),0)`, result: fromBani(courier.taxBani) },
+      { formula: `IF(B${rowNumber}="TOATE",MAX(0,E${rowNumber}+F${rowNumber}-I${rowNumber}-K${rowNumber}),MAX(0,F${rowNumber}-I${rowNumber}))`, result: fromBani(courier.amountDueBani) },
+      courier.reviewCount,
+      courier.warningCount,
+    ];
+    stylePayrollDataRow(row, rowNumber);
+    rowNumber += 1;
+  }
+  const firstDataRow = 5;
+  const lastDataRow = Math.max(firstDataRow, rowNumber - 1);
+  const totalRow = sheet.getRow(rowNumber + 1);
+  totalRow.values = [
+    'TOTAL ECHIPA', '',
+    { formula: `SUM(C${firstDataRow}:C${lastDataRow})` },
+    { formula: `SUM(D${firstDataRow}:D${lastDataRow})` },
+    { formula: `SUM(E${firstDataRow}:E${lastDataRow})` },
+    { formula: `SUM(F${firstDataRow}:F${lastDataRow})` },
+    { formula: `SUM(G${firstDataRow}:G${lastDataRow})` }, '',
+    { formula: `SUM(I${firstDataRow}:I${lastDataRow})` }, '',
+    { formula: `SUM(K${firstDataRow}:K${lastDataRow})` },
+    { formula: `SUM(L${firstDataRow}:L${lastDataRow})` },
+    { formula: `SUM(M${firstDataRow}:M${lastDataRow})` },
+    { formula: `SUM(N${firstDataRow}:N${lastDataRow})` },
+  ];
+  totalRow.height = 27;
+  totalRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173449' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+  });
+  sheet.getColumn(1).alignment = { horizontal: 'left' };
+  [4, 5, 6, 7, 8, 9, 11, 12].forEach((column) => { sheet.getColumn(column).numFmt = '#,##0.00 "RON"'; });
+  sheet.getColumn(10).numFmt = '0.00%';
+  sheet.autoFilter = { from: 'A4', to: `N${lastDataRow}` };
+
+  const adjustmentRow = sheet.getRow(rowNumber + 3);
+  adjustmentRow.values = ['AJUSTARE COMISION GLOBAL', '', '', '', '', '', '', '', safeNumber(settings.payroll.commissionAdjustmentLei)];
+  const netCommissionRow = sheet.getRow(rowNumber + 4);
+  netCommissionRow.values = ['COMISION NET ECHIPA', '', '', '', '', '', '', '', {
+    formula: `MAX(0,I${rowNumber + 1}-I${rowNumber + 3})`,
+  }];
+  [adjustmentRow, netCommissionRow].forEach((row, index) => {
+    row.height = 24;
+    row.getCell(1).font = { bold: true, color: { argb: 'FF173449' } };
+    row.getCell(9).font = { bold: true, color: { argb: index === 0 ? 'FF9A4D00' : 'FF0C7B63' } };
+    row.getCell(9).numFmt = '#,##0.00 "RON"';
+  });
+}
+
+function addPayrollWarningsSheet(
+  workbook: ExcelJS.Workbook,
+  warnings: string[],
+  lines: ReturnType<typeof buildPayrollResult>['lines'],
+): void {
+  if (warnings.length === 0) return;
+  const sheet = workbook.addWorksheet('Avertizari salariale', { views: [{ state: 'frozen', ySplit: 1 }] });
+  sheet.columns = [
+    { header: 'Tip', key: 'type', width: 18 },
+    { header: 'Data', key: 'date', width: 14 },
+    { header: 'Restaurant', key: 'restaurant', width: 30 },
+    { header: 'Curier', key: 'courier', width: 30 },
+    { header: 'Motiv verificare', key: 'warning', width: 70 },
+  ];
+  lines.filter((line) => line.warning).forEach((line) => sheet.addRow({
+    type: 'Calcul', date: line.dayKey, restaurant: line.restaurantName,
+    courier: line.courierName, warning: line.warning,
+  }));
+  styleWorksheet(sheet, 1, sheet.rowCount);
+  sheet.getColumn(5).alignment = { vertical: 'top', wrapText: true };
+}
+
+function addPayrollDataSheet(workbook: ExcelJS.Workbook, lines: ReturnType<typeof buildPayrollResult>['lines']): void {
+  const sheet = workbook.addWorksheet('Date calcul');
+  sheet.state = 'veryHidden';
+  sheet.columns = [
+    { header: 'Data', key: 'date', width: 14 }, { header: 'Restaurant ID', key: 'restaurantId', width: 20 },
+    { header: 'Restaurant', key: 'restaurant', width: 28 }, { header: 'Curier ID', key: 'courierId', width: 20 },
+    { header: 'Curier', key: 'courier', width: 30 }, { header: 'Metoda', key: 'method', width: 14 },
+    { header: 'Comenzi', key: 'orders', width: 12 }, { header: 'Valoare zi', key: 'day', width: 15 },
+    { header: 'Valoare noapte', key: 'night', width: 17 }, { header: 'Valoare totala', key: 'total', width: 17 },
+    { header: 'Review', key: 'review', width: 10 }, { header: 'Avertizare', key: 'warning', width: 45 },
+  ];
+  for (const line of lines) {
+    sheet.addRow({ date: line.dayKey, restaurantId: line.restaurantId, restaurant: line.restaurantName,
+      courierId: line.courierId ?? '', courier: line.courierName, method: line.paymentMethod,
+      orders: line.totalOrders, day: fromBani(line.dayValueBani), night: fromBani(line.nightValueBani),
+      total: fromBani(line.totalValueBani), review: line.reviewCount, warning: line.warning });
+  }
+  ['H', 'I', 'J'].forEach((column) => { sheet.getColumn(column).numFmt = '#,##0.00'; });
+}
+
+function addPayrollSettingsSheet(
+  workbook: ExcelJS.Workbook,
+  restaurants: Restaurant[],
+  couriers: Courier[],
+  settings: AppSettings,
+): void {
+  const sheet = workbook.addWorksheet('Setari calcul');
+  sheet.state = 'veryHidden';
+  const payroll = mergePayrollSettings(settings.payroll);
+  sheet.addRow(['Zona', 'Zi cash', 'Zi facturat', 'Noapte cash', 'Noapte facturat']);
+  (['zone1', 'zone2', 'zone3'] as const).forEach((zone, index) => {
+    const rates = payroll.zoneRates[zone];
+    sheet.addRow([`Z${index + 1}`, rates.dayCash, rates.dayInvoiced, rates.nightCash, rates.nightInvoiced]);
+  });
+  sheet.addRow([]); sheet.addRow(['Restaurant ID', 'Restaurant', 'Metoda plata']);
+  restaurants.forEach((restaurant) => sheet.addRow([restaurant.id, restaurant.name, resolveRestaurantMethod(payroll, restaurant).method]));
+  sheet.addRow([]); sheet.addRow(['Curier ID', 'Curier', 'Tip calcul', 'Comision/com.', 'Taxe', 'Comision factura']);
+  couriers.forEach((courier) => {
+    const rule = resolveCourierRule(payroll, courier);
+    sheet.addRow([courier.id, courier.name, rule.calculationMode, rule.commissionPerOrder, rule.taxRate, rule.invoiceCommissionPerOrder]);
+  });
+}
+
 function addProfessionalDailySheet(
   workbook: ExcelJS.Workbook,
   report: ScanReport,
   sheetName: string,
   rows: DailyCourierSummary[],
+  payrollByDailyId: Map<string, ReturnType<typeof buildPayrollResult>['lines'][number]>,
 ): void {
   const sheet = workbook.addWorksheet(uniqueWorksheetName(workbook, sheetName), {
     views: [{ state: 'frozen', ySplit: 4 }],
   });
-  const columnCount = 16;
+  const columnCount = 18;
   sheet.columns = [
     { width: 32 },
     { width: 11 },
     { width: 9 },
     { width: 9 },
     { width: 9 },
-    { width: 12 },
+    { width: 14 },
     { width: 14 },
     { width: 9 },
     { width: 9 },
     { width: 9 },
-    { width: 12 },
+    { width: 20 },
     { width: 10 },
     { width: 10 },
     { width: 13 },
     { width: 13 },
     { width: 8 },
+    { width: 15 },
+    { width: 17 },
   ];
   sheet.pageSetup = {
     orientation: 'landscape',
@@ -2850,6 +3240,7 @@ function addProfessionalDailySheet(
         }
 
         const excelRow = sheet.getRow(rowNumber);
+        const payrollLine = payrollByDailyId.get(dailyRow.id);
         excelRow.values = [
           dailyRow.courierName,
           dailyRow.pickedUp,
@@ -2867,8 +3258,12 @@ function addProfessionalDailySheet(
           formatDurationMinutes(dailyRow.averageDeliveryMinutes),
           shouldShowWorkHours ? formatWorkMinutes(workMinutes) : '',
           dailyRow.reviewCount,
+          payrollLine ? fromBani(payrollLine.dayValueBani) : 0,
+          payrollLine ? fromBani(payrollLine.nightValueBani) : 0,
         ];
         styleProfessionalDataRow(excelRow, rowNumber);
+        excelRow.getCell(17).numFmt = '#,##0.00 "RON"';
+        excelRow.getCell(18).numFmt = '#,##0.00 "RON"';
         rowNumber += 1;
       }
 
@@ -2879,7 +3274,12 @@ function addProfessionalDailySheet(
   }
 }
 
-function addRestaurantProfessionalSheets(workbook: ExcelJS.Workbook, report: ScanReport): void {
+function addRestaurantProfessionalSheets(
+  workbook: ExcelJS.Workbook,
+  report: ScanReport,
+  payrollLines: ReturnType<typeof buildPayrollResult>['lines'],
+): void {
+  const payrollByDailyId = new Map(payrollLines.map((line) => [line.id, line]));
   const restaurantGroups = Array.from(
     report.dailyCourierSummaries.reduce((groups, row) => {
       const key = row.restaurantId || row.restaurantName;
@@ -2897,6 +3297,7 @@ function addRestaurantProfessionalSheets(workbook: ExcelJS.Workbook, report: Sca
       report,
       restaurantName,
       rows,
+      payrollByDailyId,
     );
   }
 }
@@ -3303,18 +3704,43 @@ function addProfessionalHeaderRow(sheet: ExcelJS.Worksheet, rowNumber: number): 
     'Timp',
     'Ore lucrate',
     'Rev',
+    'Valoare zi',
+    'Valoare noapte',
   ];
-  row.height = 22;
+  row.height = 38;
   row.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: 'FF526273' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F9FB' } };
-    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = {
       top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
       bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
     };
   });
   row.getCell(1).alignment = { vertical: 'middle', horizontal: 'left' };
+}
+
+function stylePayrollHeader(row: ExcelJS.Row): void {
+  row.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173449' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = { bottom: { style: 'thin', color: { argb: 'FFFFFFFF' } } };
+  });
+  row.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+}
+
+function stylePayrollDataRow(row: ExcelJS.Row, rowNumber: number): void {
+  row.height = 24;
+  row.eachCell((cell, columnNumber) => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowNumber % 2 === 0 ? 'FFFFFFFF' : 'FFF8FAFB' } };
+    cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+    cell.alignment = { vertical: 'middle', horizontal: columnNumber === 1 ? 'left' : 'center' };
+  });
+  row.getCell(1).font = { bold: true, color: { argb: 'FF18212F' } };
+  if (Number(row.getCell(14).value) > 0) {
+    row.getCell(14).font = { bold: true, color: { argb: 'FFB45309' } };
+  }
 }
 
 function styleProfessionalDataRow(row: ExcelJS.Row, rowNumber: number): void {
@@ -3636,6 +4062,27 @@ function formatCurrencyValue(value: number): string {
 
 function safeNumber(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function safeInputNumber(value: string): number {
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function payrollMethodLabel(method: PayrollPaymentMethod): string {
+  if (method === 'cashPaid') return 'Cash achitat';
+  if (method === 'invoiced') return 'Facturat';
+  return 'Cash';
+}
+
+function payrollRateLabel(rate: 'dayCash' | 'dayInvoiced' | 'nightCash' | 'nightInvoiced'): string {
+  const labels = {
+    dayCash: 'Zi cash',
+    dayInvoiced: 'Zi facturat',
+    nightCash: 'Noapte cash',
+    nightInvoiced: 'Noapte facturat',
+  };
+  return labels[rate];
 }
 
 function formatWorkMinutes(value: number): string {

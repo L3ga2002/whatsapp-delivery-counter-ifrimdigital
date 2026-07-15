@@ -1,7 +1,17 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { buildScanReport, parseWhatsAppExport } from '../shared/parser';
+import { defaultPayrollSettings } from '../shared/payroll';
 import { buildReportWorkbook } from './App';
+
+const appSettings = {
+  nightStartHour: 23,
+  nightEndHour: 4,
+  maxWorkSessionHours: 18,
+  defaultExportScope: 'full' as const,
+  importRetentionDays: 30,
+  payroll: { ...defaultPayrollSettings, enabled: true },
+};
 
 function createTwoRestaurantReport() {
   const first = parseWhatsAppExport(
@@ -33,18 +43,46 @@ function createTwoRestaurantReport() {
 }
 
 describe('restaurant workbook export', () => {
-  it('puts only restaurant worksheets in the primary full export', () => {
+  it('puts the salary report first and keeps calculation sheets hidden', () => {
     const workbook = buildReportWorkbook(
       createTwoRestaurantReport(),
       ExcelJS,
       { scope: 'full', restaurantIds: [] },
       [],
+      [],
+      appSettings,
     );
 
-    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+    expect(workbook.worksheets.filter((sheet) => sheet.state === 'visible').map((sheet) => sheet.name)).toEqual([
+      'Raport salarial',
       'Restaurant Alfa',
       'Restaurant Beta',
+      'Avertizari salariale',
     ]);
+    expect(workbook.getWorksheet('Date calcul')?.state).toBe('veryHidden');
+    expect(workbook.getWorksheet('Setari calcul')?.state).toBe('veryHidden');
+  });
+
+  it('requires explicit payroll activation for financial exports', () => {
+    expect(() => buildReportWorkbook(
+      createTwoRestaurantReport(),
+      ExcelJS,
+      { scope: 'full', restaurantIds: [] },
+      [],
+      [],
+      { ...appSettings, payroll: { ...appSettings.payroll, enabled: false } },
+    )).toThrow(/nu este activat/i);
+  });
+
+  it('wraps the special night header and gives it enough width', () => {
+    const workbook = buildReportWorkbook(
+      createTwoRestaurantReport(), ExcelJS, { scope: 'full', restaurantIds: [] }, [], [], appSettings,
+    );
+    const sheet = workbook.getWorksheet('Restaurant Alfa');
+    const headerRow = sheet?.findRow(7);
+    expect(sheet?.getColumn(11).width).toBeGreaterThanOrEqual(20);
+    expect(headerRow?.getCell(11).value).toBe('Speciale noapte');
+    expect(headerRow?.getCell(11).alignment?.wrapText).toBe(true);
   });
 
   it('keeps the global workbook available only through its dedicated scope', () => {
@@ -53,6 +91,8 @@ describe('restaurant workbook export', () => {
       ExcelJS,
       { scope: 'global', restaurantIds: [] },
       [],
+      [],
+      appSettings,
     );
 
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['Raport final livratori']);
