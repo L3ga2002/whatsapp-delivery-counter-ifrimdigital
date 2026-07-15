@@ -38,6 +38,10 @@ import type {
   ScanReport,
   WorkspaceSnapshot,
 } from '../shared/types';
+import { collectDetectedCourierIdentities } from '../shared/courier-identities';
+
+const uiOperationWatchdogMs = 120_000;
+const workspaceReloadTimeoutMs = 30_000;
 
 const defaultScanOptions: ScanOptions = {
   scanOrders: true,
@@ -92,6 +96,18 @@ export default function App(): JSX.Element {
   }, [desktopApi]);
 
   useEffect(() => {
+    if (!isBusy) return;
+    const timeout = window.setTimeout(() => {
+      setIsBusy(false);
+      setNotice({
+        kind: 'error',
+        text: 'Operatiunea a durat prea mult si interfata a fost deblocata. Apasa Reincarca si verifica rezultatul inainte sa retrimiti actiunea.',
+      });
+    }, uiOperationWatchdogMs);
+    return () => window.clearTimeout(timeout);
+  }, [isBusy]);
+
+  useEffect(() => {
     if (!workspace) {
       return;
     }
@@ -107,7 +123,11 @@ export default function App(): JSX.Element {
       return;
     }
     try {
-      const nextWorkspace = await desktopApi.getWorkspace();
+      const nextWorkspace = await withTimeout(
+        desktopApi.getWorkspace(),
+        workspaceReloadTimeoutMs,
+        'Workspace-ul nu a raspuns la timp.',
+      );
       setWorkspace(nextWorkspace);
       if (selectedReportId) {
         const nextSelected = nextWorkspace.reports.find((item) => item.id === selectedReportId);
@@ -177,7 +197,11 @@ export default function App(): JSX.Element {
     }
     setIsBusy(true);
     try {
-      await desktopApi.saveCourier(input);
+      await withTimeout(
+        desktopApi.saveCourier(input),
+        workspaceReloadTimeoutMs,
+        'Salvarea curierului nu a raspuns la timp. Verifica lista inainte sa incerci din nou.',
+      );
       await reloadWorkspace();
       setReport(null);
       setActiveReviewRow(null);
@@ -587,7 +611,10 @@ export default function App(): JSX.Element {
             <p className="eyebrow large">IfrimDigital</p>
             <h1>Professional Reporting Workspace</h1>
           </div>
-          <button className="secondary-button" type="button" onClick={reloadWorkspace} disabled={isBusy}>
+          <button className="secondary-button" type="button" onClick={() => {
+            setIsBusy(false);
+            void reloadWorkspace();
+          }}>
             <RefreshCw aria-hidden="true" />
             <span>Reincarca</span>
           </button>
@@ -614,6 +641,7 @@ export default function App(): JSX.Element {
         {activeView === 'couriers' ? (
           <CouriersView
             couriers={workspace.couriers}
+            reportImports={workspace.reportImports}
             onSave={handleSaveCourier}
             onDelete={handleDeleteCourier}
             isBusy={isBusy}
@@ -797,11 +825,13 @@ function RestaurantsView({
 
 function CouriersView({
   couriers,
+  reportImports,
   onSave,
   onDelete,
   isBusy,
 }: {
   couriers: Courier[];
+  reportImports: ReportImport[];
   onSave: (input: CourierInput) => Promise<boolean>;
   onDelete: (courierId: string) => Promise<void>;
   isBusy: boolean;
@@ -809,8 +839,16 @@ function CouriersView({
   const emptyDraft = { id: '', name: '', phone: '', aliases: '', notes: '' };
   const [draft, setDraft] = useState(emptyDraft);
   const [initialDraft, setInitialDraft] = useState(emptyDraft);
+  const [detectedIdentity, setDetectedIdentity] = useState('');
+  const [targetCourierId, setTargetCourierId] = useState('');
   const isEditing = Boolean(draft.id);
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
+  const detectedIdentities = useMemo(
+    () => collectDetectedCourierIdentities(reportImports, couriers),
+    [couriers, reportImports],
+  );
+  const unassignedIdentities = detectedIdentities.filter((identity) => !identity.mappedCourierId);
+  const activeCouriers = couriers.filter((courier) => courier.isActive);
 
   const resetDraft = (): void => {
     setDraft(emptyDraft);
@@ -825,12 +863,12 @@ function CouriersView({
     <div className="view-stack">
       <EntityForm
         title={isEditing ? 'Editeaza curier' : 'Adauga curier'}
-        description="Adauga exact numele sau telefonul afisat in conversatia WhatsApp. Dupa salvare, rescaneaza raportul."
+        description="Salveaza numele dorit in raport. Numele exact din WhatsApp il asociezi simplu in sectiunea de mai jos."
         disabled={isBusy}
         fields={[
           { label: 'Nume curier', value: draft.name, onChange: (value) => setDraft((current) => ({ ...current, name: value })) },
           { label: 'Telefon', value: draft.phone, onChange: (value) => setDraft((current) => ({ ...current, phone: value })) },
-          { label: 'Aliasuri WhatsApp', value: draft.aliases, onChange: (value) => setDraft((current) => ({ ...current, aliases: value })) },
+          { label: 'Identitati WhatsApp asociate', value: draft.aliases, onChange: (value) => setDraft((current) => ({ ...current, aliases: value })) },
           { label: 'Observatii', value: draft.notes, onChange: (value) => setDraft((current) => ({ ...current, notes: value })) },
         ]}
         submitLabel={isBusy ? 'Se salveaza...' : isEditing ? 'Salveaza modificarile' : 'Salveaza curierul'}
@@ -848,6 +886,81 @@ function CouriersView({
           if (saved) resetDraft();
         }}
       />
+      <section className="panel detected-identities-panel">
+        <div className="panel-heading">
+          <Search aria-hidden="true" />
+          <div>
+            <h2>Identitati WhatsApp detectate</h2>
+            <p>Alege numele exact din conversatie si curierul real. Asocierea se pastreaza pentru rapoartele viitoare.</p>
+          </div>
+        </div>
+        {unassignedIdentities.length && activeCouriers.length ? (
+          <div className="identity-assignment-grid">
+            <label>
+              Nume detectat in WhatsApp
+              <select value={detectedIdentity} onChange={(event) => setDetectedIdentity(event.target.value)}>
+                <option value="">Alege identitatea</option>
+                {unassignedIdentities.map((identity) => (
+                  <option key={identity.normalizedIdentity} value={identity.normalizedIdentity}>
+                    {identity.rawIdentity} ({identity.messageCount} mesaje)
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Curierul care trebuie afisat
+              <select value={targetCourierId} onChange={(event) => setTargetCourierId(event.target.value)}>
+                <option value="">Alege curierul</option>
+                {activeCouriers.map((courier) => (
+                  <option key={courier.id} value={courier.id}>{courier.name}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={isBusy || !detectedIdentity || !targetCourierId}
+              onClick={async () => {
+                const identity = unassignedIdentities.find((item) => item.normalizedIdentity === detectedIdentity);
+                const courier = activeCouriers.find((item) => item.id === targetCourierId);
+                if (!identity || !courier) return;
+                const saved = await onSave({
+                  id: courier.id,
+                  name: courier.name,
+                  phone: courier.phone,
+                  aliases: [...courier.aliases, identity.rawIdentity],
+                  isActive: courier.isActive,
+                  notes: courier.notes,
+                });
+                if (saved) {
+                  setDetectedIdentity('');
+                  setTargetCourierId('');
+                }
+              }}
+            >
+              <CheckCircle2 aria-hidden="true" />
+              <span>Asociaza si salveaza</span>
+            </button>
+          </div>
+        ) : (
+          <EmptyState text={activeCouriers.length ? 'Toate identitatile detectate sunt asociate.' : 'Adauga mai intai un curier activ.'} />
+        )}
+        {detectedIdentities.length ? (
+          <div className="detected-identity-list">
+            {detectedIdentities.map((identity) => (
+              <div className="detected-identity-row" key={identity.normalizedIdentity}>
+                <div>
+                  <strong>{identity.rawIdentity}</strong>
+                  <span>{identity.messageCount} mesaje detectate</span>
+                </div>
+                <small className={identity.mappedCourierId ? 'mapped' : 'unmapped'}>
+                  {identity.mappedCourierName ?? 'Neasociat'}
+                </small>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
       <EntityTable
         title="Curieri"
         emptyText="Nu exista curieri salvati."
@@ -906,16 +1019,21 @@ function DateTimePicker({
 
   useEffect(() => {
     if (!isOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent): void => {
+    const closeOnOutsideClick = (event: PointerEvent): void => {
+      if (!containerRef.current?.contains(event.target as Node)) closePicker(false);
+    };
+    const closeOnOutsideFocus = (event: FocusEvent): void => {
       if (!containerRef.current?.contains(event.target as Node)) closePicker(false);
     };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') closePicker();
     };
-    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('pointerdown', closeOnOutsideClick, true);
+    document.addEventListener('focusin', closeOnOutsideFocus);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('pointerdown', closeOnOutsideClick, true);
+      document.removeEventListener('focusin', closeOnOutsideFocus);
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [isOpen]);
@@ -953,7 +1071,6 @@ function DateTimePicker({
         <div className="date-time-popover" role="dialog" aria-label={`Selecteaza ${label.toLocaleLowerCase('ro-RO')}`}>
           <DayPicker
             mode="single"
-            autoFocus
             locale={ro}
             weekStartsOn={1}
             selected={selectedDate}
@@ -1371,7 +1488,7 @@ function ReportsView({
               </div>
               <button className="primary-button" type="button" onClick={() => onExport({ scope: 'full', restaurantIds: [] })} disabled={isExporting}>
                 {isExporting ? <Loader2 className="spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
-                <span>Descarca raport complet</span>
+                <span>Descarca foile restaurantelor</span>
               </button>
             </div>
             <div className="quick-export-grid">
@@ -1550,7 +1667,6 @@ function SettingsView({
               max="365"
               value={retentionDays}
               onChange={(event) => setRetentionDays(event.target.value)}
-              disabled={isBusy}
             />
             zile
           </label>
@@ -1632,7 +1748,7 @@ function EntityForm({
   onSubmit: () => Promise<void>;
 }): JSX.Element {
   return (
-    <section className="panel">
+    <section className="panel" aria-busy={disabled}>
       <div className="panel-heading">
         <CheckCircle2 aria-hidden="true" />
         <div>
@@ -1647,7 +1763,6 @@ function EntityForm({
             <input
               value={field.value}
               onChange={(event) => field.onChange(event.target.value)}
-              disabled={disabled}
             />
           </label>
         ))}
@@ -1875,7 +1990,7 @@ function ExportPicker({
       <label>
         Tip export
         <select value={options.scope} onChange={(event) => onChange({ ...options, scope: event.target.value as ExportOptions['scope'] })}>
-          <option value="full">Raport complet</option>
+          <option value="full">Toate restaurantele</option>
           <option value="global">Doar raport global livratori</option>
           <option value="restaurants">Restaurante selectate</option>
           <option value="review">Doar review</option>
@@ -2567,7 +2682,7 @@ function buildCourierSummariesFromDailyRows(rows: DailyCourierSummary[]): ScanRe
   }));
 }
 
-function buildReportWorkbook(
+export function buildReportWorkbook(
   report: ScanReport,
   excel: typeof ExcelJS,
   options: ExportOptions,
@@ -2577,24 +2692,13 @@ function buildReportWorkbook(
   workbook.creator = 'IfrimDigital';
   workbook.created = new Date();
 
-  const include = (scope: ExportOptions['scope']): boolean => options.scope === 'full' || options.scope === scope;
   if (options.scope === 'full' || options.scope === 'restaurants') {
-    addProfessionalDailySheet(workbook, report, 'Pe zile - raport', report.dailyCourierSummaries);
-  }
-  if (include('global') || options.scope === 'restaurants') addGlobalSheet(workbook, report);
-  if (options.scope === 'full' || options.scope === 'restaurants') {
-    addRestaurantsSheet(workbook, report);
-    addDailySheet(workbook, report);
-    addWeeklyCompatibilitySheet(workbook, report);
-    if (options.scope === 'full') {
-      addRestaurantProfessionalSheets(workbook, report);
-    }
-    addZonesSheet(workbook, report);
-    addNightSheet(workbook, report);
-    addDeliveryTimesSheet(workbook, report);
-  }
-  if (include('workHours')) addWorkHoursSheet(workbook, report);
-  if (include('review') || (options.scope === 'restaurants' && report.reviewRows.length > 0)) {
+    addRestaurantProfessionalSheets(workbook, report);
+  } else if (options.scope === 'global') {
+    addGlobalSheet(workbook, report);
+  } else if (options.scope === 'workHours') {
+    addWorkHoursSheet(workbook, report);
+  } else if (options.scope === 'review') {
     addReviewSheet(workbook, report);
   }
 
@@ -2791,7 +2895,7 @@ function addRestaurantProfessionalSheets(workbook: ExcelJS.Workbook, report: Sca
     addProfessionalDailySheet(
       workbook,
       report,
-      `Restaurant - ${restaurantName}`,
+      restaurantName,
       rows,
     );
   }
@@ -3594,4 +3698,20 @@ function getErrorMessage(error: unknown, fallback: string): string {
     .replace(/^Error invoking remote method '[^']+':\s*/i, '')
     .replace(/^Error:\s*/i, '')
     .trim() || fallback;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }

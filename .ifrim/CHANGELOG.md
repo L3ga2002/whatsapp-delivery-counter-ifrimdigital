@@ -1,5 +1,14 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-15 - v0.3.13
+
+- Added explicit mapping from sender identities detected in imported WhatsApp conversations to saved couriers, covering exports that contain a contact name but no phone number.
+- Kept courier matching deterministic and payroll-safe: no fuzzy name matching is used, and rescanning applies the saved identity mapping to app totals and Excel exports.
+- Simplified the primary Excel export to professional restaurant-only worksheets; technical/global exports remain available through their dedicated scopes.
+- Added operation timeouts, a UI watchdog, and an always-available reload action so a stalled local request cannot leave text fields locked until restart.
+- Removed the calendar focus race caused by forced autofocus and improved outside-click/outside-focus handling.
+- Added regression tests for contact-name aliases, phone normalization, fuzzy-match rejection, and restaurant-only workbook tabs.
+
 ## 2026-07-15 - v0.3.12
 
 - Added courier editing with explicit save/cancel actions and preserved the previous courier name automatically as a WhatsApp alias after renaming.

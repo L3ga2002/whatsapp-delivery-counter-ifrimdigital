@@ -579,6 +579,69 @@ button {
   font-weight: 750;
 }
 
+.detected-identities-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.identity-assignment-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.detected-identity-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.detected-identity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #dde5eb;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.detected-identity-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.detected-identity-row strong,
+.detected-identity-row span {
+  overflow-wrap: anywhere;
+}
+
+.detected-identity-row span {
+  color: #657382;
+  font-size: 0.82rem;
+}
+
+.detected-identity-row small {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-weight: 760;
+}
+
+.detected-identity-row small.mapped {
+  color: #0b6b59;
+  background: #e6f4ef;
+}
+
+.detected-identity-row small.unmapped {
+  color: #8a4b16;
+  background: #fff0df;
+}
+
 .selected-interval-card,
 .help-box {
   display: grid;
@@ -1416,7 +1479,12 @@ select:focus {
   .form-grid,
   .form-grid.two-columns,
   .segmented-actions,
-  .compact-metrics {
+    .compact-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .identity-assignment-grid,
+  .detected-identity-list {
     grid-template-columns: 1fr;
   }
 

@@ -630,6 +630,34 @@ describe('WhatsApp export parser', () => {
 });
 
 describe('scan report builder', () => {
+  it('uses an explicitly saved contact-name alias with emoji in app and export data', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '15.07.2026, 10:00 - Robert 😊: ridicat x1',
+        '15.07.2026, 10:12 - Robert 😊: livrat x1',
+      ].join('\n'),
+      'Michelino.txt',
+    );
+
+    const report = buildScanReport(
+      parsed.messages,
+      {
+        fromIso: new Date(2026, 6, 15, 9, 0).toISOString(),
+        toIso: new Date(2026, 6, 15, 11, 0).toISOString(),
+      },
+      { 'Robert 😊': 'Roby' },
+    );
+
+    expect(report.summaries).toHaveLength(1);
+    expect(report.summaries[0]).toMatchObject({
+      displayName: 'Roby',
+      senderAliases: ['Robert 😊'],
+      pickedUp: 1,
+      delivered: 1,
+    });
+    expect(report.dailyCourierSummaries[0].courierName).toBe('Roby');
+  });
+
   it('uses inclusive selected interval boundaries and alias display names', () => {
     const parsed = parseWhatsAppExport(
       [
