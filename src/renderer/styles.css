@@ -287,6 +287,108 @@ button {
   grid-column: 1 / -1;
 }
 
+.report-interval-grid > .date-range-picker {
+  grid-column: 1 / -1;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d7dfe5;
+  border-radius: 8px;
+  color: #354250;
+  font-weight: 700;
+}
+
+.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-orange);
+}
+
+.date-range-picker {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #ded5ca;
+  border-radius: 8px;
+  background: #fffdf9;
+}
+
+.date-range-heading,
+.date-range-heading > div,
+.date-range-times {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.date-range-heading {
+  justify-content: space-between;
+}
+
+.date-range-heading svg {
+  width: 18px;
+  color: var(--accent-orange-dark);
+}
+
+.date-range-picker .rdp-root {
+  --rdp-accent-color: var(--accent-orange-dark);
+  --rdp-accent-background-color: var(--accent-orange-soft);
+  --rdp-day_button-border-radius: 6px;
+  margin: 0;
+}
+
+.date-range-picker .rdp-months {
+  justify-content: center;
+  gap: 24px;
+}
+
+.date-range-picker .rdp-weekday {
+  color: #667482;
+  font-size: 0.76rem;
+  text-transform: capitalize;
+}
+
+.date-range-times {
+  align-items: stretch;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid #eadfd4;
+}
+
+.date-range-times label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 5px 10px;
+  min-width: min(100%, 255px);
+  padding: 9px 11px;
+  border: 1px solid #d7dfe5;
+  border-radius: 8px;
+  color: #4c5967;
+  font-size: 0.84rem;
+}
+
+.date-range-times label strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--brand-dark);
+}
+
+.date-range-times input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
 .date-time-field {
   position: relative;
   display: grid;
@@ -1586,6 +1688,97 @@ select:focus {
 .context-lines {
   display: grid;
   gap: 10px;
+  max-height: min(66vh, 920px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.source-metric-button {
+  min-width: 30px;
+  padding: 3px 6px;
+  border: 0;
+  border-bottom: 1px dashed var(--accent-orange-dark);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.metric-source-control {
+  position: relative;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.metric-source-popover {
+  position: fixed;
+  z-index: 100;
+  width: min(360px, 74vw);
+  max-height: 340px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #e4a063;
+  border-radius: 8px;
+  color: #1e2936;
+  background: #fffdf9;
+  box-shadow: 0 18px 38px rgba(45, 32, 21, 0.24);
+  text-align: left;
+  transform: translateX(-50%);
+}
+
+.metric-source-popover > strong {
+  display: block;
+  color: var(--brand-dark);
+  font-size: 0.82rem;
+}
+
+.metric-source-popover > span {
+  display: block;
+  margin: 2px 0 8px;
+  color: #6c6258;
+  font-size: 0.75rem;
+}
+
+.metric-source-popover > div {
+  display: grid;
+  gap: 5px;
+}
+
+.metric-source-popover button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #eadfd3;
+  border-radius: 6px;
+  color: #27313d;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.metric-source-popover button:hover {
+  border-color: #f1a35f;
+  background: #fff3e6;
+}
+
+.metric-source-popover button strong {
+  font-size: 0.78rem;
+}
+
+.metric-source-popover button span {
+  color: #637083;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.source-metric-button:hover,
+.source-metric-button:focus-visible {
+  border-radius: 4px;
+  outline: none;
+  background: var(--accent-orange-soft);
+  color: #74310f;
 }
 
 .context-line {
@@ -1668,6 +1861,10 @@ select:focus {
   .metrics-row {
     display: grid;
   }
+
+  .date-range-picker .rdp-months {
+    gap: 8px;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1705,6 +1902,10 @@ select:focus {
   }
 
   .panel-action-heading {
+    display: grid;
+  }
+
+  .date-range-picker .rdp-months {
     display: grid;
   }
 

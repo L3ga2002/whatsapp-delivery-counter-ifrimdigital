@@ -14,7 +14,14 @@ export type ReportImportRole = 'restaurant' | 'workHours' | 'mixed';
 
 export type ExportScope = 'full' | 'global' | 'restaurants' | 'review' | 'workHours';
 
-export const PARSER_VERSION = '0.3.0';
+export const PARSER_VERSION = '0.4.0';
+
+export interface RestaurantSchedule {
+  openingTime: string;
+  closingTime: string;
+  closesNextDay: boolean;
+  usesRestaurantOrderTimeForNightTariff: boolean;
+}
 
 export interface ZoneCounts {
   zone1: number;
@@ -35,6 +42,9 @@ export interface ParsedDeliveryMessage {
   status: DeliveryStatus;
   period: 'day' | 'night';
   reportDayKey: string;
+  tariffSourceLineId?: string;
+  tariffSourceLineNumber?: number;
+  tariffSourceTimestampIso?: string;
   quantity: number;
   zoneCounts: ZoneCounts;
   outsideKilometers: number;
@@ -188,6 +198,7 @@ export interface Restaurant {
   id: string;
   name: string;
   aliases: string[];
+  schedule: RestaurantSchedule;
   isActive: boolean;
   notes: string;
   createdAtIso: string;
@@ -198,6 +209,7 @@ export interface RestaurantInput {
   id?: string;
   name: string;
   aliases?: string[];
+  schedule?: Partial<RestaurantSchedule>;
   isActive?: boolean;
   notes?: string;
 }
@@ -356,6 +368,38 @@ export interface CourierSummary {
   sourceMessageIds: string[];
 }
 
+export type MetricSourceKey =
+  | 'dayTotal'
+  | 'dayZone1'
+  | 'dayZone2'
+  | 'dayZone3'
+  | 'daySpecial'
+  | 'nightTotal'
+  | 'nightZone1'
+  | 'nightZone2'
+  | 'nightZone3'
+  | 'nightSpecial';
+
+export interface MetricSourceRecord {
+  id: string;
+  period: 'day' | 'night';
+  classification: 'zone1' | 'zone2' | 'zone3' | 'special';
+  restaurantId?: string;
+  restaurantName: string;
+  courierName: string;
+  dayKey: string;
+  pickupMessageId: string;
+  pickupSourceId: string;
+  pickupLineNumber: number;
+  pickupTimestampIso: string;
+  pickupMessage: string;
+  deliveryMessageId?: string;
+  deliverySourceId?: string;
+  deliveryLineNumber?: number;
+  deliveryTimestampIso?: string;
+  deliveryMessage?: string;
+}
+
 export interface MessageReviewRow {
   kind: 'message';
   id: string;
@@ -403,7 +447,17 @@ export interface AvailabilityReviewRow {
   rawLine: string;
 }
 
-export type ReviewRow = MessageReviewRow | MismatchReviewRow | AvailabilityReviewRow;
+export interface MetricSourceReviewRow {
+  kind: 'metric-source';
+  id: string;
+  severity: 'warning';
+  restaurantName: string;
+  courierName: string;
+  sourceMessageIds: string[];
+  reason: string;
+}
+
+export type ReviewRow = MessageReviewRow | MismatchReviewRow | AvailabilityReviewRow | MetricSourceReviewRow;
 
 export interface RestaurantSummary {
   restaurantId: string;
@@ -505,5 +559,6 @@ export interface ScanReport {
   restaurantSummaries: RestaurantSummary[];
   dailyCourierSummaries: DailyCourierSummary[];
   workSummaries: WorkHoursSummary[];
+  metricSources: MetricSourceRecord[];
   reviewRows: ReviewRow[];
 }

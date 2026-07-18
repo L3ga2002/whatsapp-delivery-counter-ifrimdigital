@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyRestaurantScheduleTariff,
   buildScanReport,
+  filterMessagesForRestaurantSchedule,
   normalizeCourierIdentity,
   parseImportedTexts,
   parseWhatsAppExport,
@@ -1033,6 +1035,136 @@ describe('scan report builder', () => {
     );
   });
 
+  it('adds repeated Online/Offline sessions only for the same courier', () => {
+    const availability = parseWhatsAppExport(
+      [
+        '30.05.2026, 09:00 - Ana: Online',
+        '30.05.2026, 10:00 - Ana: Offline',
+        '30.05.2026, 11:00 - Ana: online',
+        '30.05.2026, 12:30 - Ana: offline',
+        '30.05.2026, 09:30 - Ion: Disponibil',
+        '30.05.2026, 11:30 - Ion: Indisponibil',
+      ].join('\n'),
+      'Conversație WhatsApp cu Livrări Bunicu Costi.txt',
+    );
+    const report = buildScanReport(
+      [],
+      { fromIso: new Date(2026, 4, 30, 8, 0).toISOString(), toIso: new Date(2026, 4, 30, 13, 0).toISOString() },
+      {},
+      availability.availabilityMessages,
+    );
+
+    expect(report.summaries.find((summary) => summary.displayName === 'Ana')).toMatchObject({ workMinutes: 150, workSessionCount: 2 });
+    expect(report.summaries.find((summary) => summary.displayName === 'Ion')).toMatchObject({ workMinutes: 120, workSessionCount: 1 });
+  });
+
+  it('accepts conservative spelling mistakes in availability messages and keeps them in review', () => {
+    const availability = parseWhatsAppExport(
+      [
+        '30.05.2026, 09:00 - Ana: Onlin',
+        '30.05.2026, 10:30 - Ana: Ofline',
+      ].join('\n'),
+      'Conversație WhatsApp cu Pontaj.txt',
+    );
+    const report = buildScanReport(
+      [],
+      { fromIso: new Date(2026, 4, 30, 8, 0).toISOString(), toIso: new Date(2026, 4, 30, 11, 0).toISOString() },
+      {},
+      availability.availabilityMessages,
+    );
+
+    expect(report.summaries.find((summary) => summary.displayName === 'Ana')).toMatchObject({ workMinutes: 90, workSessionCount: 1 });
+    expect(report.reviewRows).toContainEqual(expect.objectContaining({
+      kind: 'availability',
+      courierName: 'Ana',
+      reason: expect.stringContaining('Corectat automat'),
+    }));
+  });
+
+  it('keeps a single pickup after 23:00 on the day tariff when a configured night restaurant posted its order before 23:00', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 22:50 - Pizzeria Romana: Comanda noua, Strada Republicii 10, telefon 0740123456',
+        '30.05.2026, 23:10 - Ana: Ridicat x1',
+        '30.05.2026, 23:25 - Ana: Livrat x1',
+      ].join('\n'),
+      'Conversație WhatsApp cu Pizzeria ROMANA Delivery.txt',
+      undefined,
+      'Pizzeria Romana',
+    );
+    const scheduledMessages = applyRestaurantScheduleTariff(parsed.messages, parsed.conversationLines, {
+      openingTime: '10:00', closingTime: '04:00', closesNextDay: true, usesRestaurantOrderTimeForNightTariff: true,
+    });
+    const report = buildScanReport(
+      scheduledMessages,
+      {
+        fromIso: new Date(scheduledMessages[0].timestampMs - 60 * 60_000).toISOString(),
+        toIso: new Date(scheduledMessages[scheduledMessages.length - 1].timestampMs + 60 * 60_000).toISOString(),
+      },
+      {},
+    );
+
+    expect(report.totalPickedUp).toBe(1);
+    expect(report.totalNightPickedUp).toBe(0);
+  });
+
+  it('uses each restaurant schedule for pickups while retaining a related delivery after closing', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 09:50 - Ana: Ridicat x1',
+        '30.05.2026, 22:50 - Ana: Ridicat x1',
+        '30.05.2026, 23:10 - Ana: Livrat x1',
+        '30.05.2026, 23:20 - Ana: Ridicat x1',
+      ].join('\n'),
+      'Restaurant Program.txt',
+    );
+    const filtered = filterMessagesForRestaurantSchedule(parsed.messages, {
+      openingTime: '10:00', closingTime: '23:00', closesNextDay: false, usesRestaurantOrderTimeForNightTariff: false,
+    });
+
+    expect(filtered.map((message) => message.originalMessage)).toEqual(['Ridicat x1', 'Livrat x1']);
+  });
+
+  it('keeps restaurant programs independent when reports combine multiple restaurant imports', () => {
+    const boulevard = parseWhatsAppExport(
+      [
+        '30.05.2026, 10:30 - Ana: Ridicat x1',
+        '30.05.2026, 12:00 - Ana: Ridicat x1',
+      ].join('\n'),
+      'Boulevard.txt',
+      undefined,
+      'Boulevard',
+    );
+    const penes = parseWhatsAppExport(
+      [
+        '30.05.2026, 12:00 - Ion: Ridicat x1',
+        '30.05.2026, 16:00 - Ion: Ridicat x1',
+      ].join('\n'),
+      'Penes Food.txt',
+      undefined,
+      'Penes Food',
+    );
+
+    const boulevardFiltered = filterMessagesForRestaurantSchedule(boulevard.messages, {
+      openingTime: '11:00', closingTime: '21:30', closesNextDay: false, usesRestaurantOrderTimeForNightTariff: false,
+    });
+    const penesFiltered = filterMessagesForRestaurantSchedule(penes.messages, {
+      openingTime: '14:00', closingTime: '22:00', closesNextDay: false, usesRestaurantOrderTimeForNightTariff: false,
+    });
+
+    const report = buildScanReport(
+      [...boulevardFiltered, ...penesFiltered],
+      { fromIso: new Date(2026, 4, 30, 10, 0).toISOString(), toIso: new Date(2026, 4, 30, 17, 0).toISOString() },
+      {},
+    );
+
+    expect(report.totalPickedUp).toBe(2);
+    expect(report.restaurantSummaries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ restaurantName: 'Boulevard', pickedUp: 1 }),
+      expect.objectContaining({ restaurantName: 'Penes Food', pickedUp: 1 }),
+    ]));
+  });
+
   it('uses scan options to extract only order counts when requested', () => {
     const parsed = parseWhatsAppExport(
       [
@@ -1237,6 +1369,36 @@ describe('scan report builder', () => {
         courierName: 'Ana',
         difference: 1,
         sourceMessageIds: parsed.messages.map((message) => message.id),
+      }),
+    );
+  });
+
+  it('keeps each paid pickup linked to its completed zone and delivery message for metric drill-down', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 21:14 - Ana: ridicat x1',
+        '30.05.2026, 21:22 - Ana: livrat x1 zona 2',
+      ].join('\n'),
+      'chat.txt',
+    );
+
+    const report = buildScanReport(
+      parsed.messages,
+      {
+        fromIso: new Date(2026, 4, 30, 21, 0).toISOString(),
+        toIso: new Date(2026, 4, 30, 22, 0).toISOString(),
+      },
+      {},
+    );
+
+    expect(report.summaries[0].zoneCounts.zone2).toBe(1);
+    expect(report.metricSources).toContainEqual(
+      expect.objectContaining({
+        courierName: 'Ana',
+        period: 'day',
+        classification: 'zone2',
+        pickupMessageId: parsed.messages[0].id,
+        deliveryMessageId: parsed.messages[1].id,
       }),
     );
   });

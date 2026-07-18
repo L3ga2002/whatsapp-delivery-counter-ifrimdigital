@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("quick", "security", "architect", "frontend", "parser", "qa", "desktop", "implementer", "opus", "fable")]
+    [ValidateSet("quick", "security", "architect", "frontend", "parser", "qa", "desktop", "implementer", "opus")]
     [string]$Profile = "quick",
 
     [string]$Task = "Review the current WhatsApp Delivery Counter project and report the most important actionable issues.",
@@ -23,7 +23,6 @@ $profiles = @{
     desktop = @{ Agent = "ifrim-claude-desktop-packager"; Model = "opus"; Effort = "high"; Label = "claude-desktop-packaging-review" }
     implementer = @{ Agent = "ifrim-claude-implementer"; Model = "sonnet"; Effort = "high"; Label = "claude-implementation" }
     opus = @{ Agent = "ifrim-claude-opus-principal"; Model = "opus"; Effort = "high"; Label = "claude-opus-review" }
-    fable = @{ Agent = "ifrim-claude-opus-principal"; Model = "opus"; Effort = "high"; Label = "claude-opus-review-legacy-fable-alias" }
 }
 
 $selected = $profiles[$Profile]

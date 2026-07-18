@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { autoUpdater } from 'electron-updater';
-import { buildScanReport, parseImportedTexts } from '../src/shared/parser';
+import { applyRestaurantScheduleTariff, buildScanReport, filterMessagesForRestaurantSchedule, parseImportedTexts } from '../src/shared/parser';
 import { WorkspaceStore } from './workspace-store';
 import type {
   AliasMap,
@@ -551,21 +551,36 @@ function materializeReportInputs(
     const displayName = restaurant?.name ?? reportImport.sourceLabel;
 
     if ((reportImport.role === 'restaurant' || reportImport.role === 'mixed') && restaurantAllowed) {
-      messages.push(
-        ...reportImport.importResult.messages.map((message) => ({
-          ...message,
-          restaurantId: reportImport.restaurantId ?? undefined,
-          restaurantName: displayName,
-        })),
-      );
+      const files = reportImport.importResult.files?.length
+        ? reportImport.importResult.files
+        : [{ messages: reportImport.importResult.messages, conversationLines: [] }];
+      for (const file of files) {
+        const scheduledMessages = applyRestaurantScheduleTariff(
+          filterMessagesForRestaurantSchedule(file.messages, restaurant?.schedule),
+          file.conversationLines,
+          restaurant?.schedule,
+        );
+        messages.push(
+          ...scheduledMessages.map((message) => ({
+            ...message,
+            restaurantId: reportImport.restaurantId ?? undefined,
+            restaurantName: displayName,
+          })),
+        );
+      }
     }
 
     if (reportImport.role === 'workHours' || reportImport.role === 'mixed') {
+      const files = reportImport.importResult.files?.length
+        ? reportImport.importResult.files
+        : [{ availabilityMessages: reportImport.importResult.availabilityMessages }];
       availabilityMessages.push(
-        ...reportImport.importResult.availabilityMessages.map((message) => ({
-          ...message,
-          restaurantName: displayName,
-        })),
+        ...files.flatMap((file) =>
+          file.availabilityMessages.map((message) => ({
+            ...message,
+            restaurantName: displayName,
+          })),
+        ),
       );
     }
   }

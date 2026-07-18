@@ -5,6 +5,9 @@
 - Central bootstrap:
   - `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\THREAD_BOOTSTRAP.md`
   - `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\AGENT_ROUTING_PROTOCOL.md`
+  - `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\IFRIM_TAG.md`
+  - `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\DATA_PROTECTION.md`
+  - `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\LOOP_ENGINEERING.md`
 - .ifrim/PROJECT_STATE.md
 - .ifrim/PRODUCT_BRIEF.md
 - .ifrim/PARSER_SPEC.md
@@ -49,6 +52,21 @@
   - Claude Code review/audit profile
   - hybrid OpenClaw + Claude
 - Do not silently skip OpenClaw/Claude for parser, privacy/security, QA, desktop packaging, architecture, or cross-module work.
+
+## Ifrim Tag
+
+- If Catalin uses `@whatsapp-counter` or `@ifrim`, start with active project, memory read, agent routing, preview plan, Git state, and execution plan.
+
+## Data Protection
+
+- Do not delete, overwrite, wipe, reset, truncate, or mass-replace important project data without Catalin's explicit approval.
+- Normal small code edits are allowed. Ask before deleting features, source modules, local SQLite/user data, imports, reports, exports, project memory, Git history, deployment settings, or client/user data.
+
+## Automatic Loops
+
+- Loops are read-only by default.
+- They may inspect, verify, create task packets, and save reports under `.ifrim/LOOP_REPORTS`.
+- They may not edit source code, delete data, commit, push, or change deployment settings.
 
 ## Required Implementation Rule
 

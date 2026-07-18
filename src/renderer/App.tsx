@@ -35,6 +35,8 @@ import type {
   RestaurantInput,
   PayrollCalculationMode,
   PayrollPaymentMethod,
+  MetricSourceKey,
+  MetricSourceRecord,
   ReviewRow,
   ScanOptions,
   ScanReport,
@@ -191,7 +193,7 @@ export default function App(): JSX.Element {
       await reloadWorkspace();
       setNotice({
         kind: 'success',
-        text: isUsed ? 'Restaurant dezactivat. Istoricul ramane disponibil.' : 'Restaurant sters.',
+        text: isUsed ? 'Restaurant sters. Importurile istorice raman lizibile in rapoarte.' : 'Restaurant sters.',
       });
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge restaurantul.') });
@@ -212,9 +214,18 @@ export default function App(): JSX.Element {
         'Salvarea curierului nu a raspuns la timp. Verifica lista inainte sa incerci din nou.',
       );
       await reloadWorkspace();
-      setReport(null);
+      if (selectedReport && report) {
+        const rescanned = await withTimeout(
+          desktopApi.scanSavedReport(selectedReport.id, scanOptions),
+          workspaceReloadTimeoutMs,
+          'Raportul nu a putut fi actualizat automat dupa salvarea curierului.',
+        );
+        setReport(rescanned);
+      } else {
+        setReport(null);
+      }
       setActiveReviewRow(null);
-      setNotice({ kind: 'success', text: 'Curier salvat. Scaneaza din nou raportul pentru a aplica aliasurile.' });
+      setNotice({ kind: 'success', text: selectedReport && report ? 'Curier salvat. Raportul deschis a fost actualizat cu noul alias.' : 'Curier salvat. La urmatoarea scanare, raportul va folosi noul alias.' });
       return true;
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut salva curierul.') });
@@ -233,7 +244,7 @@ export default function App(): JSX.Element {
       setNotice({ kind: 'error', text: 'Curierul selectat nu mai exista in workspace.' });
       return;
     }
-    const confirmed = window.confirm(`Dezactivezi curierul "${courier.name}"? Aliasurile raman pastrate pentru rapoartele istorice.`);
+    const confirmed = window.confirm(`Stergi definitiv curierul "${courier.name}"? Asocierea poate fi facuta din nou ulterior.`);
     if (!confirmed) {
       return;
     }
@@ -241,7 +252,7 @@ export default function App(): JSX.Element {
     try {
       await desktopApi.deleteCourier(courierId);
       await reloadWorkspace();
-      setNotice({ kind: 'success', text: 'Curier dezactivat. Aliasurile raman disponibile pentru rapoarte istorice.' });
+      setNotice({ kind: 'success', text: 'Curier sters. Poti crea unul nou si reasocia identitatea WhatsApp corecta.' });
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge curierul.') });
     } finally {
@@ -564,14 +575,6 @@ export default function App(): JSX.Element {
       return;
     }
     const effectiveOptions = overrideOptions ?? exportOptions;
-    if ((effectiveOptions.scope === 'full' || effectiveOptions.scope === 'restaurants') && !workspace.settings.payroll.enabled) {
-      setActiveView('settings');
-      setNotice({
-        kind: 'info',
-        text: 'Activeaza si salveaza raportul salarial din Setari dupa ce verifici tarifele si regulile de plata.',
-      });
-      return;
-    }
     setIsExporting(true);
     try {
       const { default: excel } = await import('exceljs');
@@ -811,34 +814,88 @@ function RestaurantsView({
   onDelete: (restaurantId: string) => Promise<void>;
   isBusy: boolean;
 }): JSX.Element {
-  const [draft, setDraft] = useState({ name: '', aliases: '', notes: '' });
+  const emptyDraft = {
+    id: '',
+    name: '',
+    openingTime: '10:00',
+    closingTime: '23:00',
+    closesNextDay: false,
+    usesRestaurantOrderTimeForNightTariff: false,
+  };
+  const [draft, setDraft] = useState(emptyDraft);
+  const [initialDraft, setInitialDraft] = useState(emptyDraft);
+  const isEditing = Boolean(draft.id);
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
+
+  const resetDraft = (): void => {
+    setDraft(emptyDraft);
+    setInitialDraft(emptyDraft);
+  };
+
+  const editRestaurant = (restaurantId: string): void => {
+    const restaurant = restaurants.find((item) => item.id === restaurantId);
+    if (!restaurant) return;
+    if (isDirty && !window.confirm('Ai modificari nesalvate. Renunti la ele?')) return;
+    const nextDraft = {
+      id: restaurant.id,
+      name: restaurant.name,
+      openingTime: restaurant.schedule.openingTime,
+      closingTime: restaurant.schedule.closingTime,
+      closesNextDay: restaurant.schedule.closesNextDay,
+      usesRestaurantOrderTimeForNightTariff: restaurant.schedule.usesRestaurantOrderTimeForNightTariff,
+    };
+    setDraft(nextDraft);
+    setInitialDraft(nextDraft);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   return (
     <div className="view-stack">
-      <EntityForm
-        title="Adauga restaurant"
-        description="Restaurantul ramane in memorie si poate fi selectat la fiecare import."
-        disabled={isBusy}
-        fields={[
-          { label: 'Nume restaurant', value: draft.name, onChange: (value) => setDraft((current) => ({ ...current, name: value })) },
-          { label: 'Aliasuri grup WhatsApp', value: draft.aliases, onChange: (value) => setDraft((current) => ({ ...current, aliases: value })) },
-          { label: 'Observatii', value: draft.notes, onChange: (value) => setDraft((current) => ({ ...current, notes: value })) },
-        ]}
-        onSubmit={async () => {
-          await onSave({ name: draft.name, aliases: splitList(draft.aliases), notes: draft.notes });
-          setDraft({ name: '', aliases: '', notes: '' });
-        }}
-      />
+      <section className="panel" aria-busy={isBusy}>
+        <div className="panel-heading">
+          <Building2 aria-hidden="true" />
+          <div>
+            <h2>{isEditing ? 'Editeaza restaurant' : 'Adauga restaurant'}</h2>
+            <p>Pastrezi numele si programul. Programul se aplica automat cand importi conversatia restaurantului.</p>
+          </div>
+        </div>
+        <div className="form-grid two-columns">
+          <label>Nume restaurant<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+          <label>Deschide la<input type="time" value={draft.openingTime} onChange={(event) => setDraft((current) => ({ ...current, openingTime: event.target.value }))} /></label>
+          <label>Inchide la<input type="time" value={draft.closingTime} onChange={(event) => setDraft((current) => ({ ...current, closingTime: event.target.value }))} /></label>
+          <label className="checkbox-field"><input type="checkbox" checked={draft.closesNextDay} onChange={(event) => setDraft((current) => ({ ...current, closesNextDay: event.target.checked }))} /><span>Programul trece dupa miezul noptii</span></label>
+          {draft.closesNextDay ? <label className="checkbox-field"><input type="checkbox" checked={draft.usesRestaurantOrderTimeForNightTariff} onChange={(event) => setDraft((current) => ({ ...current, usesRestaurantOrderTimeForNightTariff: event.target.checked }))} /><span>Comenzile intrate in restaurant inainte de 23:00 raman tarif zi</span></label> : null}
+        </div>
+        <div className="form-actions">
+          <button className="primary-button" type="button" disabled={isBusy} onClick={async () => {
+            const saved = await onSave({
+              id: draft.id || undefined,
+              name: draft.name,
+              aliases: [],
+              notes: '',
+              schedule: {
+                openingTime: draft.openingTime,
+                closingTime: draft.closingTime,
+                closesNextDay: draft.closesNextDay,
+                usesRestaurantOrderTimeForNightTariff: draft.usesRestaurantOrderTimeForNightTariff,
+              },
+            });
+            if (saved) resetDraft();
+          }}><CheckCircle2 aria-hidden="true" /><span>Salveaza restaurantul</span></button>
+          {isEditing ? <button className="secondary-button" type="button" disabled={isBusy} onClick={resetDraft}>Renunta</button> : null}
+        </div>
+      </section>
       <EntityTable
         title="Restaurante"
         emptyText="Nu exista restaurante salvate."
         rows={restaurants.map((restaurant) => ({
           id: restaurant.id,
           primary: restaurant.name,
-          secondary: restaurant.aliases.length ? restaurant.aliases.join(', ') : 'fara aliasuri',
-          meta: restaurant.isActive ? 'activ' : 'inactiv',
+          secondary: `${restaurant.schedule.openingTime} - ${restaurant.schedule.closingTime}${restaurant.schedule.closesNextDay ? ' (dupa miezul noptii)' : ''}`,
+          meta: restaurant.schedule.usesRestaurantOrderTimeForNightTariff ? 'tarif noapte dupa ora comenzii' : restaurant.isActive ? 'activ' : 'inactiv',
           inactive: !restaurant.isActive,
         }))}
+        onEdit={editRestaurant}
         onDelete={onDelete}
         deleteLabel="Sterge"
         disabled={isBusy}
@@ -887,13 +944,10 @@ function CouriersView({
     <div className="view-stack">
       <EntityForm
         title={isEditing ? 'Editeaza curier' : 'Adauga curier'}
-        description="Salveaza numele dorit in raport. Numele exact din WhatsApp il asociezi simplu in sectiunea de mai jos."
+        description="Salveaza doar numele afisat in raport. Numele sau numarul exact din WhatsApp il asociezi separat, mai jos."
         disabled={isBusy}
         fields={[
           { label: 'Nume curier', value: draft.name, onChange: (value) => setDraft((current) => ({ ...current, name: value })) },
-          { label: 'Telefon', value: draft.phone, onChange: (value) => setDraft((current) => ({ ...current, phone: value })) },
-          { label: 'Identitati WhatsApp asociate', value: draft.aliases, onChange: (value) => setDraft((current) => ({ ...current, aliases: value })) },
-          { label: 'Observatii', value: draft.notes, onChange: (value) => setDraft((current) => ({ ...current, notes: value })) },
         ]}
         submitLabel={isBusy ? 'Se salveaza...' : isEditing ? 'Salveaza modificarile' : 'Salveaza curierul'}
         onCancel={isEditing ? () => {
@@ -1019,99 +1073,47 @@ function CouriersView({
   );
 }
 
-function DateTimePicker({
-  label,
-  value,
+function DateRangePicker({
+  from,
+  to,
   onChange,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
+  from: string;
+  to: string;
+  onChange: (range: { from: string; to: string }) => void;
 }): JSX.Element {
-  const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const selectedDate = parseDateTimeInputValue(value) ?? new Date();
-  const timeValue = value.slice(11, 16) || '00:00';
+  const fromDate = parseDateTimeInputValue(from) ?? new Date();
+  const toDate = parseDateTimeInputValue(to) ?? fromDate;
 
-  const closePicker = (restoreFocus = true): void => {
-    setIsOpen(false);
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => triggerRef.current?.focus());
-    }
-  };
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const closeOnOutsideClick = (event: PointerEvent): void => {
-      if (!containerRef.current?.contains(event.target as Node)) closePicker(false);
-    };
-    const closeOnOutsideFocus = (event: FocusEvent): void => {
-      if (!containerRef.current?.contains(event.target as Node)) closePicker(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') closePicker();
-    };
-    document.addEventListener('pointerdown', closeOnOutsideClick, true);
-    document.addEventListener('focusin', closeOnOutsideFocus);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsideClick, true);
-      document.removeEventListener('focusin', closeOnOutsideFocus);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [isOpen]);
-
-  const updateDate = (date: Date | undefined): void => {
-    if (!date) return;
-    const [hours, minutes] = timeValue.split(':').map(Number);
-    const next = new Date(date);
-    next.setHours(hours || 0, minutes || 0, 0, 0);
-    onChange(toDateTimeInputValue(next));
-  };
-
-  const updateTime = (time: string): void => {
-    const [hours, minutes] = time.split(':').map(Number);
-    const next = new Date(selectedDate);
-    next.setHours(hours || 0, minutes || 0, 0, 0);
-    onChange(toDateTimeInputValue(next));
+  const setRange = (nextFrom: Date, nextTo: Date): void => {
+    const start = new Date(nextFrom);
+    const end = new Date(nextTo);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 0, 0);
+    onChange({ from: toDateTimeInputValue(start), to: toDateTimeInputValue(end) });
   };
 
   return (
-    <div className="date-time-field" ref={containerRef}>
-      <span className="field-label">{label}</span>
-      <button
-        ref={triggerRef}
-        className="date-time-trigger"
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-        onClick={() => setIsOpen((current) => !current)}
-      >
-        <span>{formatLocalDateTimeValue(value)}</span>
-        <CalendarDays aria-hidden="true" />
-      </button>
-      {isOpen ? (
-        <div className="date-time-popover" role="dialog" aria-label={`Selecteaza ${label.toLocaleLowerCase('ro-RO')}`}>
-          <DayPicker
-            mode="single"
-            locale={ro}
-            weekStartsOn={1}
-            selected={selectedDate}
-            defaultMonth={selectedDate}
-            onSelect={updateDate}
-            showOutsideDays
-          />
-          <div className="time-picker-row">
-            <label>
-              Ora
-              <input type="time" value={timeValue} onChange={(event) => updateTime(event.target.value)} />
-            </label>
-            <button className="primary-button compact" type="button" onClick={() => closePicker()}>Gata</button>
-          </div>
-        </div>
-      ) : null}
-    </div>
+    <section className="date-range-picker" aria-label="Interval calendaristic">
+      <div className="date-range-heading">
+        <div><CalendarDays aria-hidden="true" /><strong>Interval scanare</strong></div>
+        <button className="secondary-button compact" type="button" onClick={() => onChange({ from: toDateTimeInputValue(startOfDay(new Date())), to: toDateTimeInputValue(new Date()) })}>Alege din nou</button>
+      </div>
+      <DayPicker
+        mode="range"
+        locale={ro}
+        weekStartsOn={1}
+        selected={{ from: fromDate, to: toDate }}
+        defaultMonth={fromDate}
+        numberOfMonths={2}
+        showOutsideDays
+        onSelect={(range) => {
+          if (!range?.from) return;
+          setRange(range.from, range.to ?? range.from);
+        }}
+      />
+      <p className="date-range-help">Alegi doar zilele. Pentru fiecare restaurant, scanarea foloseste automat programul salvat la Restaurante.</p>
+    </section>
   );
 }
 
@@ -1320,15 +1322,10 @@ function ReportsView({
               Nume raport
               <input value={reportDraft.name} onChange={(event) => setReportDraft((current) => ({ ...current, name: event.target.value }))} />
             </label>
-            <DateTimePicker
-              label="De la"
-              value={reportDraft.from}
-              onChange={(value) => setReportDraft((current) => ({ ...current, from: value }))}
-            />
-            <DateTimePicker
-              label="Pana la"
-              value={reportDraft.to}
-              onChange={(value) => setReportDraft((current) => ({ ...current, to: value }))}
+            <DateRangePicker
+              from={reportDraft.from}
+              to={reportDraft.to}
+              onChange={(range) => setReportDraft((current) => ({ ...current, ...range }))}
             />
           </div>
           {selectedReport ? (
@@ -1512,10 +1509,10 @@ function ReportsView({
               </div>
               <button className="primary-button" type="button" onClick={() => onExport({ scope: 'full', restaurantIds: [] })} disabled={isExporting}>
                 {isExporting ? <Loader2 className="spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
-                <span>Descarca raportul salarial</span>
+                <span>Descarca Excel pe restaurante</span>
               </button>
             </div>
-            <div className="quick-export-grid">
+            <div className="quick-export-grid" hidden>
               <label>
                 Raport restaurant
                 <select value={selectedExportRestaurantId} onChange={(event) => setQuickExportRestaurantId(event.target.value)}>
@@ -1542,7 +1539,8 @@ function ReportsView({
                 <span>Descarca review</span>
               </button>
             </div>
-            <details className="advanced-details">
+            <div className="help-box">Excelul contine exclusiv cate un sheet pentru fiecare restaurant, grupat pe zile. Este pregatit pentru importul in fisierul VBA al clientului.</div>
+            <details className="advanced-details" hidden>
               <summary>Export avansat</summary>
               <ExportPicker restaurants={restaurantExportOptions.length ? restaurantExportOptions : reportRestaurantOptions} options={exportOptions} onChange={setExportOptions} />
               <button className="secondary-button" type="button" onClick={() => onExport()} disabled={isExporting}>
@@ -1638,7 +1636,7 @@ function SettingsView({
           <div className="notice warning" key={message}>{message}</div>
         ))}
       </section>
-      <section className="panel payroll-settings-panel">
+      <section className="panel payroll-settings-panel" hidden>
         <div className="panel-heading">
           <FileArchive aria-hidden="true" />
           <div>
@@ -2025,8 +2023,8 @@ function EntityTable({
                       className="secondary-button compact"
                       type="button"
                       onClick={() => onEdit(row.id)}
-                      disabled={disabled || row.inactive}
-                      title={row.inactive ? 'Curierul este inactiv.' : 'Editeaza curierul'}
+                      disabled={disabled}
+                      title="Editeaza inregistrarea"
                     >
                       <Pencil aria-hidden="true" />
                       <span>Editeaza</span>
@@ -2037,11 +2035,11 @@ function EntityTable({
                       className="danger-button"
                       type="button"
                       onClick={() => void onDelete(row.id)}
-                      disabled={disabled || row.inactive}
-                      title={row.inactive ? 'Inregistrarea este deja inactiva.' : deleteLabel}
+                      disabled={disabled}
+                      title={deleteLabel}
                     >
                       <Trash2 aria-hidden="true" />
-                      <span>{row.inactive ? 'Inactiv' : deleteLabel}</span>
+                      <span>{deleteLabel}</span>
                     </button>
                   ) : null}
                 </div>
@@ -2258,7 +2256,7 @@ function ReportResults({
             <p>Total global pe toate restaurantele incluse in scanare.</p>
           </div>
         </div>
-        {report.summaries.length ? <SummaryTable report={report} /> : <EmptyState text="Nu exista totaluri globale." />}
+        {report.summaries.length ? <SummaryTable report={report} onOpenSource={(source) => openMetricSource(source, setActiveReviewRow, setActiveTab)} /> : <EmptyState text="Nu exista totaluri globale." />}
       </section>
       ) : null}
 
@@ -2271,7 +2269,7 @@ function ReportResults({
             <p>Totaluri pe restaurant.</p>
           </div>
         </div>
-        {report.restaurantSummaries.length ? <RestaurantTable report={report} /> : <EmptyState text="Nu exista totaluri pe restaurante." />}
+        {report.restaurantSummaries.length ? <RestaurantTable report={report} onOpenSource={(source) => openMetricSource(source, setActiveReviewRow, setActiveTab)} /> : <EmptyState text="Nu exista totaluri pe restaurante." />}
       </section>
       ) : null}
 
@@ -2284,7 +2282,7 @@ function ReportResults({
             <p>Raport zilnic pe restaurant si livrator.</p>
           </div>
         </div>
-        {report.dailyCourierSummaries.length ? <DailyCourierTable rows={report.dailyCourierSummaries} /> : <EmptyState text="Nu exista raport pe zile." />}
+        {report.dailyCourierSummaries.length ? <DailyCourierTable report={report} rows={report.dailyCourierSummaries} onOpenSource={(source) => openMetricSource(source, setActiveReviewRow, setActiveTab)} /> : <EmptyState text="Nu exista raport pe zile." />}
       </section>
       ) : null}
 
@@ -2297,7 +2295,7 @@ function ReportResults({
               <p>Comenzi speciale separate pe zi/noapte, inclusiv valorile in lei sau kilometri.</p>
             </div>
           </div>
-          {report.summaries.length ? <NightExternalTable report={report} /> : <EmptyState text="Nu exista totaluri de noapte sau comenzi speciale." />}
+          {report.summaries.length ? <NightExternalTable report={report} onOpenSource={(source) => openMetricSource(source, setActiveReviewRow, setActiveTab)} /> : <EmptyState text="Nu exista totaluri de noapte sau comenzi speciale." />}
         </section>
       ) : null}
 
@@ -2366,7 +2364,13 @@ function ResultTabButton({
   );
 }
 
-function SummaryTable({ report }: { report: ScanReport }): JSX.Element {
+function SummaryTable({
+  report,
+  onOpenSource,
+}: {
+  report: ScanReport;
+  onOpenSource: (source: MetricSourceRecord) => void;
+}): JSX.Element {
   return (
     <div className="table-wrap">
       <table>
@@ -2379,17 +2383,17 @@ function SummaryTable({ report }: { report: ScanReport }): JSX.Element {
           {report.summaries.map((row) => (
             <tr key={row.courierId}>
               <td><strong>{row.displayName}</strong><span>{row.senderAliases.join(', ')}</span></td>
-              <td>{row.pickedUp}</td>
-              <td>{row.zoneCounts.zone1}</td>
-              <td>{row.zoneCounts.zone2}</td>
-              <td>{row.zoneCounts.zone3}</td>
-              <td>{formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.pickedUp} metric="dayTotal" label="Total zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone1} metric="dayZone1" label="Z1 zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone2} metric="dayZone2" label="Z2 zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td>{row.nightPickedUp}</td>
-              <td>{row.nightZoneCounts.zone1}</td>
-              <td>{row.nightZoneCounts.zone2}</td>
-              <td>{row.nightZoneCounts.zone3}</td>
-              <td>{formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
               <td>{row.pickedUp + row.nightPickedUp}</td>
               <td>{row.delivered + row.nightDelivered}</td>
@@ -2405,7 +2409,129 @@ function SummaryTable({ report }: { report: ScanReport }): JSX.Element {
   );
 }
 
-function NightExternalTable({ report }: { report: ScanReport }): JSX.Element {
+function MetricSourceButton({
+  value,
+  report,
+  metric,
+  label,
+  filter,
+  onOpenSource,
+  formatter,
+}: {
+  value: number;
+  report: ScanReport;
+  metric: MetricSourceKey;
+  label: string;
+  filter: { courierName?: string; restaurantName?: string; dayKey?: string };
+  onOpenSource: (source: MetricSourceRecord) => void;
+  formatter?: () => string | number;
+}): JSX.Element {
+  const [isOpen, setIsOpen] = useState(false);
+  const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
+  const controlRef = useRef<HTMLSpanElement>(null);
+  const timerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const sources = groupMetricSources(findMetricSources(report.metricSources, metric, filter));
+  const clearTimer = (): void => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+  };
+  const clearCloseTimer = (): void => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+  const scheduleClose = (): void => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => setIsOpen(false), 260);
+  };
+  const openPopover = (): void => {
+    clearCloseTimer();
+    const bounds = controlRef.current?.getBoundingClientRect();
+    if (bounds) {
+      setPopoverPosition({
+        top: Math.min(bounds.bottom + 8, window.innerHeight - 348),
+        left: Math.max(188, Math.min(bounds.left + bounds.width / 2, window.innerWidth - 188)),
+      });
+    }
+    setIsOpen(true);
+  };
+  const scheduleOpen = (): void => {
+    clearTimer();
+    clearCloseTimer();
+    timerRef.current = window.setTimeout(openPopover, 900);
+  };
+  useEffect(() => () => { clearTimer(); clearCloseTimer(); }, []);
+  if (value === 0 || sources.length === 0) return <span>{formatter?.() ?? value}</span>;
+  return (
+    <span ref={controlRef} className="metric-source-control" onMouseEnter={scheduleOpen} onMouseLeave={() => { clearTimer(); scheduleClose(); }}>
+      <button className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); clearCloseTimer(); isOpen ? setIsOpen(false) : openPopover(); }}>
+        {formatter?.() ?? value}
+      </button>
+      {isOpen ? <div className="metric-source-popover" role="dialog" aria-label={`Comenzi pentru ${label}`} style={popoverPosition ?? undefined} onMouseEnter={clearCloseTimer} onMouseLeave={scheduleClose}>
+        <strong>{label}</strong><span>{sources.reduce((total, source) => total + source.quantity, 0)} comenzi</span>
+        <div>{sources.map((source) => <button type="button" key={source.id} onClick={() => { clearCloseTimer(); setIsOpen(false); onOpenSource(source.record); }}>
+          <strong>{formatDateTime(source.record.pickupTimestampIso)}</strong><span>{source.record.restaurantName} · ridicat x{source.quantity}{source.record.deliveryTimestampIso ? ` · livrat ${formatDateTime(source.record.deliveryTimestampIso).split(', ')[1] ?? ''}` : ''}</span>
+        </button>)}</div>
+      </div> : null}
+    </span>
+  );
+}
+
+function findMetricSources(
+  sources: MetricSourceRecord[],
+  metric: MetricSourceKey,
+  filter: { courierName?: string; restaurantName?: string; dayKey?: string },
+): MetricSourceRecord[] {
+  return sources.filter((source) =>
+    metricSourceMatches(source, metric) &&
+    (!filter.courierName || source.courierName === filter.courierName) &&
+    (!filter.restaurantName || source.restaurantName === filter.restaurantName) &&
+    (!filter.dayKey || source.dayKey === filter.dayKey),
+  );
+}
+
+function metricSourceMatches(source: MetricSourceRecord, metric: MetricSourceKey): boolean {
+  if (metric === 'dayTotal') return source.period === 'day';
+  if (metric === 'nightTotal') return source.period === 'night';
+  if (metric === 'daySpecial') return source.period === 'day' && source.classification === 'special';
+  if (metric === 'nightSpecial') return source.period === 'night' && source.classification === 'special';
+  const expectedPeriod = metric.startsWith('night') ? 'night' : 'day';
+  const expectedZone = metric.endsWith('Zone1') ? 'zone1' : metric.endsWith('Zone2') ? 'zone2' : 'zone3';
+  return source.period === expectedPeriod && source.classification === expectedZone;
+}
+
+function groupMetricSources(sources: MetricSourceRecord[]): Array<{ id: string; quantity: number; record: MetricSourceRecord }> {
+  const groups = new Map<string, { id: string; quantity: number; record: MetricSourceRecord }>();
+  for (const source of sources) {
+    const key = `${source.pickupMessageId}:${source.classification}`;
+    const current = groups.get(key);
+    if (current) {
+      current.quantity += 1;
+    } else {
+      groups.set(key, { id: key, quantity: 1, record: source });
+    }
+  }
+  return Array.from(groups.values());
+}
+
+function openMetricSource(
+  source: MetricSourceRecord,
+  setActiveReviewRow: (row: ReviewRow | null) => void,
+  setActiveTab: (tab: ResultTab) => void,
+): void {
+  setActiveReviewRow({
+    kind: 'metric-source',
+    id: `metric-review-${source.id}`,
+    severity: 'warning',
+    restaurantName: source.restaurantName,
+    courierName: source.courierName,
+    sourceMessageIds: [source.pickupMessageId, ...(source.deliveryMessageId ? [source.deliveryMessageId] : [])],
+    reason: `Comanda ridicata la ${formatDateTime(source.pickupTimestampIso)}${source.deliveryTimestampIso ? ` si livrata la ${formatDateTime(source.deliveryTimestampIso)}` : ''}.`,
+  });
+  setActiveTab('review');
+}
+
+function NightExternalTable({ report, onOpenSource }: { report: ScanReport; onOpenSource: (source: MetricSourceRecord) => void }): JSX.Element {
   return (
     <div className="table-wrap">
       <table>
@@ -2418,13 +2544,13 @@ function NightExternalTable({ report }: { report: ScanReport }): JSX.Element {
           {report.summaries.map((row) => (
             <tr key={row.courierId}>
               <td><strong>{row.displayName}</strong><span>{row.senderAliases.join(', ')}</span></td>
-              <td>{formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td>{row.nightPickedUp}</td>
-              <td>{row.nightZoneCounts.zone1}</td>
-              <td>{row.nightZoneCounts.zone2}</td>
-              <td>{row.nightZoneCounts.zone3}</td>
-              <td>{formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
               <td className={row.difference === 0 ? 'balanced' : 'warning-text'}>{row.difference}</td>
               <td>{row.unclearCount + row.workReviewCount}</td>
@@ -2461,7 +2587,7 @@ function DeliveryTimesTable({ report }: { report: ScanReport }): JSX.Element {
   );
 }
 
-function RestaurantTable({ report }: { report: ScanReport }): JSX.Element {
+function RestaurantTable({ report, onOpenSource }: { report: ScanReport; onOpenSource: (source: MetricSourceRecord) => void }): JSX.Element {
   return (
     <div className="table-wrap">
       <table>
@@ -2475,17 +2601,17 @@ function RestaurantTable({ report }: { report: ScanReport }): JSX.Element {
             <tr key={row.restaurantId}>
               <td><strong>{row.restaurantName}</strong></td>
               <td>{row.courierCount}</td>
-              <td>{row.pickedUp}</td>
-              <td>{row.zoneCounts.zone1}</td>
-              <td>{row.zoneCounts.zone2}</td>
-              <td>{row.zoneCounts.zone3}</td>
-              <td>{formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.pickedUp} metric="dayTotal" label="Total zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone1} metric="dayZone1" label="Z1 zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone2} metric="dayZone2" label="Z2 zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td>{row.nightPickedUp}</td>
-              <td>{row.nightZoneCounts.zone1}</td>
-              <td>{row.nightZoneCounts.zone2}</td>
-              <td>{row.nightZoneCounts.zone3}</td>
-              <td>{formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)}</td>
+              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
               <td>{row.pickedUp + row.nightPickedUp}</td>
               <td>{row.delivered + row.nightDelivered}</td>
@@ -2500,7 +2626,7 @@ function RestaurantTable({ report }: { report: ScanReport }): JSX.Element {
   );
 }
 
-function DailyCourierTable({ rows }: { rows: DailyCourierSummary[] }): JSX.Element {
+function DailyCourierTable({ report, rows, onOpenSource }: { report: ScanReport; rows: DailyCourierSummary[]; onOpenSource: (source: MetricSourceRecord) => void }): JSX.Element {
   const groups = groupDailyRows(rows);
   return (
     <div className="daily-groups">
@@ -2525,16 +2651,16 @@ function DailyCourierTable({ rows }: { rows: DailyCourierSummary[] }): JSX.Eleme
                     {restaurant.rows.map((row) => (
                       <tr key={row.id}>
                         <td><strong>{row.courierName}</strong></td>
-                        <td>{row.pickedUp}</td>
-                        <td>{row.zoneCounts.zone1}</td>
-                        <td>{row.zoneCounts.zone2}</td>
-                        <td>{row.zoneCounts.zone3}</td>
-                        <td>{formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)}</td>
-                        <td>{row.nightPickedUp}</td>
-                        <td>{row.nightZoneCounts.zone1}</td>
-                        <td>{row.nightZoneCounts.zone2}</td>
-                        <td>{row.nightZoneCounts.zone3}</td>
-                        <td>{formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)}</td>
+                        <td><MetricSourceButton report={report} value={row.pickedUp} metric="dayTotal" label="Total zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.zoneCounts.zone1} metric="dayZone1" label="Z1 zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.zoneCounts.zone2} metric="dayZone2" label="Z2 zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
+                        <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
                         <td>{row.pickedUp + row.nightPickedUp}</td>
                         <td>{row.delivered + row.nightDelivered}</td>
                         <td>{formatDurationMinutes(row.averageDeliveryMinutes)}</td>
@@ -2591,8 +2717,8 @@ function ReviewList({
       {rows.map((row) => (
         <button className={`review-row ${row.severity} ${activeRowId === row.id ? 'active' : ''}`} key={row.id} type="button" onClick={() => onSelect(row)}>
           <strong>{row.courierName}</strong>
-          <span>{row.kind === 'mismatch' ? row.reason : `${row.restaurantName} · ${row.reason}`}</span>
-          <p>{row.kind === 'message' ? `${formatDateTime(row.timestampIso)} - ${row.originalMessage}` : row.kind === 'availability' ? `${formatDateTime(row.timestampIso)} - ${row.originalMessage}` : `Ridicat ${row.pickedUp}, livrat ${row.delivered}, diferenta ${row.difference}`}</p>
+          <span>{row.kind === 'mismatch' || row.kind === 'metric-source' ? row.reason : `${row.restaurantName} · ${row.reason}`}</span>
+          <p>{row.kind === 'message' ? `${formatDateTime(row.timestampIso)} - ${row.originalMessage}` : row.kind === 'availability' ? `${formatDateTime(row.timestampIso)} - ${row.originalMessage}` : row.kind === 'metric-source' ? 'Apasa pentru conversatia sursa evidentiata.' : `Ridicat ${row.pickedUp}, livrat ${row.delivered}, diferenta ${row.difference}`}</p>
         </button>
       ))}
     </div>
@@ -2600,55 +2726,52 @@ function ReviewList({
 }
 
 function ReviewContext({ row, imports }: { row: ReviewRow; imports: ReportImport[] }): JSX.Element {
-  if (row.kind === 'mismatch') {
+  const contextRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const target = contextRef.current?.querySelector<HTMLElement>('.context-line.target');
+    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [row.id]);
+  const files = imports.flatMap((item) => item.importResult.files ?? []);
+  const targetLinesBySource = new Map<string, Set<number>>();
+  const addTarget = (sourceId: string, lineNumber: number): void => {
+    const current = targetLinesBySource.get(sourceId) ?? new Set<number>();
+    current.add(lineNumber);
+    targetLinesBySource.set(sourceId, current);
+  };
+
+  if (row.kind === 'mismatch' || row.kind === 'metric-source') {
     const messages = imports
       .flatMap((item) => item.importResult.messages)
-      .filter((message) => row.sourceMessageIds.includes(message.id))
-      .sort((a, b) => a.timestampMs - b.timestampMs);
-
-    return (
-      <div className="review-context">
-        <h3>Context neconcordanta</h3>
-        {messages.length ? (
-          <div className="context-lines">
-            {messages.map((message) => (
-              <article className="context-line target" key={message.id}>
-                <strong>{message.restaurantName} · {message.sourceFile} · linia {message.lineNumber}</strong>
-                <span>{formatDateTime(message.timestampIso)} · {message.senderRaw}</span>
-                <code>{message.rawLine}</code>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState text="Nu am gasit mesajele sursa pentru aceasta neconcordanta. Verifica foaia Review din export." />
-        )}
-      </div>
-    );
+      .filter((message) => row.sourceMessageIds.includes(message.id));
+    messages.forEach((message) => addTarget(message.sourceId, message.lineNumber));
+  } else {
+    addTarget(row.sourceId, row.lineNumber);
   }
 
-  const source = imports
-    .flatMap((item) => item.importResult.files)
-    .find((file) => file.sourceId === row.sourceId && file.sourceFile === row.sourceFile);
-  const lines = getConversationWindow(source?.conversationLines ?? [], row.lineNumber, 6, 6);
+  const contextFiles = files.filter((file) => targetLinesBySource.has(file.sourceId));
 
   return (
     <div className="review-context">
-      <h3>Context conversatie</h3>
-      {lines.length ? (
-        <div className="context-lines">
-          {lines.map((line) => (
-            <article className={`context-line ${line.lineNumber === row.lineNumber ? 'target' : ''}`} key={line.id}>
-              <strong>{line.restaurantName} · linia {line.lineNumber}</strong>
+      <h3>{row.kind === 'mismatch' ? 'Conversatia completa pentru neconcordanta' : row.kind === 'metric-source' ? 'Conversatia completa pentru comanda selectata' : 'Conversatia completa'}</h3>
+      {contextFiles.length ? (
+        <div className="context-lines" ref={contextRef}>
+          {contextFiles.flatMap((file) => file.conversationLines.map((line) => (
+            <article className={`context-line ${targetLinesBySource.get(file.sourceId)?.has(line.lineNumber) ? 'target' : ''}`} key={line.id}>
+              <strong>{file.restaurantName} · linia {line.lineNumber}</strong>
               <span>{line.timestampIso ? formatDateTime(line.timestampIso) : 'data necunoscuta'} · {line.senderRaw || 'sistem'}</span>
               <code>{line.rawLine}</code>
             </article>
-          ))}
+          )))}
         </div>
       ) : (
-        <article className="context-line target">
-          <strong>{row.restaurantName} · linia {row.lineNumber}</strong>
-          <code>{row.rawLine}</code>
-        </article>
+        row.kind === 'mismatch' || row.kind === 'metric-source' ? (
+          <EmptyState text="Nu am gasit conversatia sursa pentru aceasta neconcordanta. Reimporta fisierul restaurantului daca mesajele au fost sterse local." />
+        ) : (
+          <article className="context-line target">
+            <strong>{row.restaurantName} · linia {row.lineNumber}</strong>
+            <code>{row.rawLine}</code>
+          </article>
+        )
       )}
     </div>
   );
@@ -2676,6 +2799,9 @@ function createScopedReport(report: ScanReport, options: ExportOptions, restaura
   const selectedMessageIds = new Set(restaurantRows.flatMap((row) => row.sourceMessageIds));
   const summaries = buildCourierSummariesFromDailyRows(dailyRows);
   const scopedNames = new Set(restaurantRows.map((row) => row.restaurantName));
+  const metricSources = report.metricSources.filter((source) =>
+    source.restaurantId ? selectedIds.has(source.restaurantId) : scopedNames.has(source.restaurantName),
+  );
   const reviewRows = [
     ...report.reviewRows.filter((row) => row.kind !== 'mismatch' && scopedNames.has(row.restaurantName)),
     ...buildScopedMismatchRows(summaries, selectedNames, selectedMessageIds),
@@ -2687,6 +2813,7 @@ function createScopedReport(report: ScanReport, options: ExportOptions, restaura
     summaries,
     restaurantSummaries: restaurantRows,
     dailyCourierSummaries: dailyRows,
+    metricSources,
     workSummaries: [],
     reviewRows,
     ...totals,
@@ -2887,34 +3014,17 @@ export function buildReportWorkbook(
   report: ScanReport,
   excel: typeof ExcelJS,
   options: ExportOptions,
-  restaurants: Restaurant[],
-  couriers: Courier[] = [],
-  settings?: AppSettings,
+  _restaurants: Restaurant[],
+  _couriers: Courier[] = [],
+  _settings?: AppSettings,
 ): ExcelJS.Workbook {
   const workbook = new excel.Workbook();
   workbook.creator = 'IfrimDigital';
   workbook.created = new Date();
   workbook.calcProperties.fullCalcOnLoad = true;
 
-  const effectiveSettings: AppSettings = settings ?? {
-    nightStartHour: 23,
-    nightEndHour: 4,
-    maxWorkSessionHours: 18,
-    defaultExportScope: 'full',
-    importRetentionDays: 30,
-    payroll: mergePayrollSettings(),
-  };
-  const payroll = buildPayrollResult(report, effectiveSettings, restaurants, couriers);
-
   if (options.scope === 'full' || options.scope === 'restaurants') {
-    if (!effectiveSettings.payroll.enabled) {
-      throw new Error('Raportul salarial nu este activat. Verifica si salveaza setarile salariale inainte de export.');
-    }
-    addPayrollSummarySheet(workbook, report, payroll, effectiveSettings);
-    addRestaurantProfessionalSheets(workbook, report, payroll.lines);
-    addPayrollWarningsSheet(workbook, payroll.warnings, payroll.lines);
-    addPayrollDataSheet(workbook, payroll.lines);
-    addPayrollSettingsSheet(workbook, restaurants, couriers, effectiveSettings);
+    addRestaurantProfessionalSheets(workbook, report);
   } else if (options.scope === 'global') {
     addGlobalSheet(workbook, report);
   } else if (options.scope === 'workHours') {
@@ -3101,12 +3211,11 @@ function addProfessionalDailySheet(
   report: ScanReport,
   sheetName: string,
   rows: DailyCourierSummary[],
-  payrollByDailyId: Map<string, ReturnType<typeof buildPayrollResult>['lines'][number]>,
 ): void {
   const sheet = workbook.addWorksheet(uniqueWorksheetName(workbook, sheetName), {
     views: [{ state: 'frozen', ySplit: 4 }],
   });
-  const columnCount = 18;
+  const columnCount = 16;
   sheet.columns = [
     { width: 32 },
     { width: 11 },
@@ -3124,8 +3233,6 @@ function addProfessionalDailySheet(
     { width: 13 },
     { width: 13 },
     { width: 8 },
-    { width: 15 },
-    { width: 17 },
   ];
   sheet.pageSetup = {
     orientation: 'landscape',
@@ -3240,7 +3347,6 @@ function addProfessionalDailySheet(
         }
 
         const excelRow = sheet.getRow(rowNumber);
-        const payrollLine = payrollByDailyId.get(dailyRow.id);
         excelRow.values = [
           dailyRow.courierName,
           dailyRow.pickedUp,
@@ -3258,12 +3364,8 @@ function addProfessionalDailySheet(
           formatDurationMinutes(dailyRow.averageDeliveryMinutes),
           shouldShowWorkHours ? formatWorkMinutes(workMinutes) : '',
           dailyRow.reviewCount,
-          payrollLine ? fromBani(payrollLine.dayValueBani) : 0,
-          payrollLine ? fromBani(payrollLine.nightValueBani) : 0,
         ];
         styleProfessionalDataRow(excelRow, rowNumber);
-        excelRow.getCell(17).numFmt = '#,##0.00 "RON"';
-        excelRow.getCell(18).numFmt = '#,##0.00 "RON"';
         rowNumber += 1;
       }
 
@@ -3277,9 +3379,7 @@ function addProfessionalDailySheet(
 function addRestaurantProfessionalSheets(
   workbook: ExcelJS.Workbook,
   report: ScanReport,
-  payrollLines: ReturnType<typeof buildPayrollResult>['lines'],
 ): void {
-  const payrollByDailyId = new Map(payrollLines.map((line) => [line.id, line]));
   const restaurantGroups = Array.from(
     report.dailyCourierSummaries.reduce((groups, row) => {
       const key = row.restaurantId || row.restaurantName;
@@ -3297,7 +3397,6 @@ function addRestaurantProfessionalSheets(
       report,
       restaurantName,
       rows,
-      payrollByDailyId,
     );
   }
 }
@@ -3641,7 +3740,11 @@ function addReviewSheet(workbook: ExcelJS.Workbook, report: ScanReport): void {
       row.kind === 'mismatch' ? row.restaurantName ?? '' : row.restaurantName,
       row.courierName,
       row.reason,
-      row.kind === 'mismatch' ? `ridicat ${row.pickedUp}, livrat ${row.delivered}` : row.originalMessage,
+      row.kind === 'mismatch'
+        ? `ridicat ${row.pickedUp}, livrat ${row.delivered}`
+        : row.kind === 'metric-source'
+          ? 'Mesaj sursa disponibil in aplicatie pentru acest total.'
+          : row.originalMessage,
     ]);
   }
   styleWorksheet(sheet, 1, report.reviewRows.length + 1);
@@ -3704,8 +3807,6 @@ function addProfessionalHeaderRow(sheet: ExcelJS.Worksheet, rowNumber: number): 
     'Timp',
     'Ore lucrate',
     'Rev',
-    'Valoare zi',
-    'Valoare noapte',
   ];
   row.height = 38;
   row.eachCell((cell) => {

@@ -8,16 +8,17 @@ Before doing any work, read:
 
 1. `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\THREAD_BOOTSTRAP.md`
 2. `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\AGENT_ROUTING_PROTOCOL.md`
-3. `.ifrim/NEXT_SESSION.md`
-4. `.ifrim/PROJECT_STATE.md`
-5. `.ifrim/PRODUCT_BRIEF.md`
-6. `.ifrim/PARSER_SPEC.md`
-7. `.ifrim/DESKTOP_EXE_SPEC.md`
-8. `.ifrim/PREVIEW.md`
-9. `.ifrim/AGENTS.md`
-10. `.ifrim/OPENCLAW.md`
-11. `README.md`
-12. `CLAUDE.md`
+3. `C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\REGRESSION_QA.md`
+4. `.ifrim/NEXT_SESSION.md`
+5. `.ifrim/PROJECT_STATE.md`
+6. `.ifrim/PRODUCT_BRIEF.md`
+7. `.ifrim/PARSER_SPEC.md`
+8. `.ifrim/DESKTOP_EXE_SPEC.md`
+9. `.ifrim/PREVIEW.md`
+10. `.ifrim/AGENTS.md`
+11. `.ifrim/OPENCLAW.md`
+12. `README.md`
+13. `CLAUDE.md`
 
 After reading memory, state the active project, path, preview plan, Git state, and agent routing decision.
 
@@ -51,6 +52,12 @@ Quick presets may exist later, but custom interval is required.
 ## Production Implementation Rule
 
 Do not implement as a demo. Implement as a real production feature, with validations, edge cases, error handling, loading states, duplicate-request protection, useful logs, and without breaking existing flows.
+
+## Regression QA Rule
+
+After any non-trivial feature, optimization, refactor, UI change, parser/data change, export/import change, packaging change, or bug fix, apply `REGRESSION_QA.md`.
+
+Do not mark work complete only because build passes. Verify the desktop app like a real user: import valid/invalid WhatsApp files, select intervals, check counts, mismatch rows, aliases, exports, duplicate imports, readable tables/buttons/dialogs, and adjacent flows that share parser/state/persistence.
 
 ## Technical Direction
 

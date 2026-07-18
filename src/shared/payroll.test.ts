@@ -5,6 +5,7 @@ import type { AppSettings, Courier, Restaurant } from './types';
 
 const restaurant: Restaurant = {
   id: 'restaurant-1', name: 'Restaurant Test', aliases: [], isActive: true, notes: '',
+  schedule: { openingTime: '10:00', closingTime: '23:00', closesNextDay: false, usesRestaurantOrderTimeForNightTariff: false },
   createdAtIso: '2026-07-15T00:00:00.000Z', updatedAtIso: '2026-07-15T00:00:00.000Z',
 };
 const courier: Courier = {

@@ -40,6 +40,13 @@ const defaultSettings: AppSettings = {
   payroll: defaultPayrollSettings,
 };
 
+const defaultRestaurantSchedule = {
+  openingTime: '10:00',
+  closingTime: '23:00',
+  closesNextDay: false,
+  usesRestaurantOrderTimeForNightTariff: false,
+};
+
 export class WorkspaceStore {
   private sql: SqlJsStatic | null = null;
   private db: Database | null = null;
@@ -180,6 +187,7 @@ export class WorkspaceStore {
       id: existing?.id ?? input.id ?? randomUUID(),
       name: sanitizeRequired(input.name, 'Numele restaurantului este obligatoriu.'),
       aliases: cleanList(input.aliases ?? existing?.aliases ?? []),
+      schedule: sanitizeRestaurantSchedule(input.schedule, existing?.schedule),
       isActive: input.isActive ?? existing?.isActive ?? true,
       notes: input.notes?.trim() ?? existing?.notes ?? '',
       createdAtIso: existing?.createdAtIso ?? now,
@@ -188,12 +196,13 @@ export class WorkspaceStore {
 
     this.run(
       `insert or replace into restaurants
-        (id, name, aliases_json, is_active, notes, created_at_iso, updated_at_iso)
-       values (?, ?, ?, ?, ?, ?, ?)`,
+        (id, name, aliases_json, schedule_json, is_active, notes, created_at_iso, updated_at_iso)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         restaurant.id,
         restaurant.name,
         JSON.stringify(restaurant.aliases),
+        JSON.stringify(restaurant.schedule),
         restaurant.isActive ? 1 : 0,
         restaurant.notes,
         restaurant.createdAtIso,
@@ -206,25 +215,11 @@ export class WorkspaceStore {
 
   async deleteRestaurant(restaurantId: string): Promise<void> {
     const id = sanitizeRequired(restaurantId, 'Restaurant invalid.');
-    const existing = this.getRestaurant(id);
-    if (!existing) {
+    if (!this.getRestaurant(id)) {
       throw new Error('Restaurantul nu exista.');
     }
-
-    const importCount = this.queryOne<{ count: number }, number>(
-      'select count(*) as count from report_imports where restaurant_id = ?',
-      [id],
-      (row) => Number(row.count),
-    ) ?? 0;
-
-    if (importCount > 0) {
-      this.run('update restaurants set is_active = 0, updated_at_iso = ? where id = ?', [
-        new Date().toISOString(),
-        id,
-      ]);
-    } else {
-      this.run('delete from restaurants where id = ?', [id]);
-    }
+    // Importurile istorice pastreaza source_label, deci pot ramane lizibile fara definitia restaurantului.
+    this.run('delete from restaurants where id = ?', [id]);
     await this.save();
   }
 
@@ -309,10 +304,7 @@ export class WorkspaceStore {
     if (!this.getCourier(id)) {
       throw new Error('Curierul nu exista.');
     }
-    this.run('update couriers set is_active = 0, updated_at_iso = ? where id = ?', [
-      new Date().toISOString(),
-      id,
-    ]);
+    this.run('delete from couriers where id = ?', [id]);
     await this.save();
   }
 
@@ -595,6 +587,7 @@ export class WorkspaceStore {
         id text primary key,
         name text not null,
         aliases_json text not null,
+        schedule_json text,
         is_active integer not null,
         notes text not null,
         created_at_iso text not null,
@@ -613,6 +606,8 @@ export class WorkspaceStore {
         updated_at_iso text not null
       )`,
     );
+
+    this.ensureColumn('restaurants', 'schedule_json', 'text');
     this.run(
       `create table if not exists reports (
         id text primary key,
@@ -652,6 +647,17 @@ export class WorkspaceStore {
 
     if (!this.getSetting<AppSettings | null>('settings', null)) {
       this.setSetting('settings', defaultSettings);
+    }
+  }
+
+  private ensureColumn(table: 'restaurants', column: 'schedule_json', definition: string): void {
+    const columns = this.queryAll<{ name: string }, string>(
+      `pragma table_info(${table})`,
+      [],
+      (row) => String(row.name),
+    );
+    if (!columns.includes(column)) {
+      this.run(`alter table ${table} add column ${column} ${definition}`);
     }
   }
 
@@ -830,6 +836,7 @@ function rowToRestaurant(row: Record<string, unknown>): Restaurant {
     id: String(row.id),
     name: String(row.name),
     aliases: parseJsonList(row.aliases_json),
+    schedule: parseRestaurantSchedule(row.schedule_json),
     isActive: Number(row.is_active) === 1,
     notes: String(row.notes ?? ''),
     createdAtIso: String(row.created_at_iso),
@@ -888,6 +895,35 @@ function parseJsonList(value: unknown): string[] {
   } catch {
     return [];
   }
+}
+
+function parseRestaurantSchedule(value: unknown): Restaurant['schedule'] {
+  try {
+    return sanitizeRestaurantSchedule(JSON.parse(String(value)) as Partial<Restaurant['schedule']>);
+  } catch {
+    return { ...defaultRestaurantSchedule };
+  }
+}
+
+function sanitizeRestaurantSchedule(
+  input?: Partial<Restaurant['schedule']>,
+  fallback?: Restaurant['schedule'],
+): Restaurant['schedule'] {
+  const base = fallback ?? defaultRestaurantSchedule;
+  return {
+    openingTime: sanitizeScheduleTime(input?.openingTime, base.openingTime),
+    closingTime: sanitizeScheduleTime(input?.closingTime, base.closingTime),
+    closesNextDay: input?.closesNextDay ?? base.closesNextDay,
+    usesRestaurantOrderTimeForNightTariff:
+      input?.usesRestaurantOrderTimeForNightTariff ?? base.usesRestaurantOrderTimeForNightTariff,
+  };
+}
+
+function sanitizeScheduleTime(value: string | undefined, fallback: string): string {
+  if (!value || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    return fallback;
+  }
+  return value;
 }
 
 function parseScanOptions(value: unknown): ScanOptions {

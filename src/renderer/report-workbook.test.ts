@@ -1,17 +1,7 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { buildScanReport, parseWhatsAppExport } from '../shared/parser';
-import { defaultPayrollSettings } from '../shared/payroll';
 import { buildReportWorkbook } from './App';
-
-const appSettings = {
-  nightStartHour: 23,
-  nightEndHour: 4,
-  maxWorkSessionHours: 18,
-  defaultExportScope: 'full' as const,
-  importRetentionDays: 30,
-  payroll: { ...defaultPayrollSettings, enabled: true },
-};
 
 function createTwoRestaurantReport() {
   const first = parseWhatsAppExport(
@@ -43,40 +33,30 @@ function createTwoRestaurantReport() {
 }
 
 describe('restaurant workbook export', () => {
-  it('puts the salary report first and keeps calculation sheets hidden', () => {
+  it('exports only one visible daily sheet for each restaurant', () => {
     const workbook = buildReportWorkbook(
       createTwoRestaurantReport(),
       ExcelJS,
       { scope: 'full', restaurantIds: [] },
       [],
-      [],
-      appSettings,
     );
 
-    expect(workbook.worksheets.filter((sheet) => sheet.state === 'visible').map((sheet) => sheet.name)).toEqual([
-      'Raport salarial',
-      'Restaurant Alfa',
-      'Restaurant Beta',
-      'Avertizari salariale',
-    ]);
-    expect(workbook.getWorksheet('Date calcul')?.state).toBe('veryHidden');
-    expect(workbook.getWorksheet('Setari calcul')?.state).toBe('veryHidden');
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['Restaurant Alfa', 'Restaurant Beta']);
+    expect(workbook.getWorksheet('Restaurant Alfa')?.getCell('A1').value).toBe('IFRIMDIGITAL - Raport pe zile');
   });
 
-  it('requires explicit payroll activation for financial exports', () => {
+  it('does not depend on payroll settings for restaurant export', () => {
     expect(() => buildReportWorkbook(
       createTwoRestaurantReport(),
       ExcelJS,
       { scope: 'full', restaurantIds: [] },
       [],
-      [],
-      { ...appSettings, payroll: { ...appSettings.payroll, enabled: false } },
-    )).toThrow(/nu este activat/i);
+    )).not.toThrow();
   });
 
   it('wraps the special night header and gives it enough width', () => {
     const workbook = buildReportWorkbook(
-      createTwoRestaurantReport(), ExcelJS, { scope: 'full', restaurantIds: [] }, [], [], appSettings,
+      createTwoRestaurantReport(), ExcelJS, { scope: 'full', restaurantIds: [] }, [],
     );
     const sheet = workbook.getWorksheet('Restaurant Alfa');
     const headerRow = sheet?.findRow(7);
@@ -91,8 +71,6 @@ describe('restaurant workbook export', () => {
       ExcelJS,
       { scope: 'global', restaurantIds: [] },
       [],
-      [],
-      appSettings,
     );
 
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['Raport final livratori']);

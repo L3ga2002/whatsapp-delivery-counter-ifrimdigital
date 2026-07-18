@@ -6,11 +6,33 @@ Claude Code is an external specialist for independent review, deep audits, and s
 
 Detailed OpenClaw routing lives in `.ifrim/OPENCLAW.md`.
 
+Also read the central agent catalog before assigning, skipping, or describing agent roles:
+
+`C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\AGENT_CATALOG.md`
+
+That catalog defines what `ifrim-backend`, `ifrim-frontend`, `ifrim-qa`, each reviewer, and each specialist agent is responsible for.
+
 ## Production Implementation Rule
 
 Before any implementation task, read and apply this rule:
 
 Do not implement as a demo. Implement as a real production feature, with validations, edge cases, error handling, loading states, duplicate-request protection, useful logs, and without breaking existing flows.
+
+## Regression QA Rule
+
+After any non-trivial feature, optimization, refactor, UI change, parser/data change, export/import change, packaging change, or bug fix, read and apply:
+
+`C:\Users\mihai\OneDrive\Desktop\Ifrim Digital Proiecte\.ifrim-system\REGRESSION_QA.md`
+
+Do not mark work complete only because build passes. Verify the desktop app workflow like a real user: import valid/invalid WhatsApp files, select intervals, check counts, mismatch rows, aliases, exports, duplicate imports, readable tables/buttons/dialogs, and adjacent flows that share parser/state/persistence.
+
+Use the relevant reviewer (`ifrim-frontend-reviewer`, `ifrim-backend-reviewer`, `ifrim-quality-reviewer`, `ifrim-security-reviewer`, `ifrim-devops-reviewer`) and `ifrim-qa` for important changes.
+
+## Data Protection Rule
+
+Do not delete, overwrite, wipe, reset, truncate, or mass-replace important project data without Catalin's explicit approval.
+
+Normal small code edits are allowed. Ask before destructive or broad changes that may remove features, source modules, local SQLite/user data, WhatsApp imports, reports, exports, project memory, Git history, deployment settings, or client/user data.
 
 ## Review Flow
 

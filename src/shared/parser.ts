@@ -4,6 +4,7 @@ import type {
   CourierSummary,
   DailyCourierSummary,
   ImportResult,
+  MetricSourceRecord,
   PaidSource,
   ParsedAvailabilityMessage,
   ParsedChatFile,
@@ -14,6 +15,7 @@ import type {
   ScanInterval,
   ScanOptions,
   ScanReport,
+  RestaurantSchedule,
   SourceKind,
   WorkHoursSummary,
   ZoneCounts,
@@ -33,16 +35,21 @@ const MONEY_REGEX = /\b(\d+(?:[.,]\d+)?)\s*(?:lei|ron)\b/gi;
 const COMPLETION_REGEX = /\bcompletare(?:\s+comanda)?\b/i;
 const RETURN_REGEX = /\bretur\b/i;
 const CANCELED_REGEX = /\banulat[ăa]?\b/i;
-const AVAILABILITY_REGEX = /\b(indisponibil|disponibil|indisp|disp)\b/i;
+const AVAILABILITY_REGEX = /\b(indisponibil|disponibil|indisp|disp|offline|online)\b/i;
+const AVAILABILITY_WORDS = ['indisponibil', 'disponibil', 'offline', 'online'] as const;
 const WORD_REGEX = /\b[\p{L}]{4,10}\b/giu;
 const MAX_AUTOMATIC_WORK_SESSION_MINUTES = 18 * 60;
 const MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES = 180;
+const MAX_RESTAURANT_ORDER_TO_PICKUP_MINUTES = 120;
+const RESTAURANT_ORDER_ADDRESS_REGEX = /\b(?:str(?:ada)?|bl(?:oc)?|sc(?:ara)?|apt(?:\.|\b)|interfon|telefon|tel(?:\.|\b)|adresa|adresă|comanda)\b/i;
+const RESTAURANT_ORDER_PHONE_REGEX = /(?:\+?40|0)7\d{8}\b/;
 type PaidUnitClassification =
   | { kind: 'zone'; zone: 1 | 2 | 3; explicit: boolean }
   | { kind: 'outside'; explicit: boolean; kilometers: number; amountLei: number };
 type DeliveryPickup = {
   timestampMs: number;
   messageId: string;
+  metricSourceId?: string;
   period: 'day' | 'night';
   classification: PaidUnitClassification;
 };
@@ -202,6 +209,125 @@ export function parseWhatsAppExport(
   };
 }
 
+/**
+ * For restaurants that explicitly run past midnight, a reliable restaurant order notice
+ * posted before 23:00 keeps a single later pickup on the day tariff. We intentionally
+ * leave multi-order pickups unchanged when the chat cannot prove a one-to-one match.
+ */
+export function applyRestaurantScheduleTariff(
+  messages: ParsedDeliveryMessage[],
+  conversationLines: ConversationLine[],
+  schedule?: RestaurantSchedule,
+): ParsedDeliveryMessage[] {
+  if (!schedule?.closesNextDay || !schedule.usesRestaurantOrderTimeForNightTariff) {
+    return messages;
+  }
+
+  const courierIdentities = new Set(
+    messages.map((message) => normalizeCourierIdentity(message.senderRaw)).filter(Boolean),
+  );
+  const notices = conversationLines
+    .filter((line) => isLikelyRestaurantOrderNotice(line, courierIdentities))
+    .sort((left, right) => left.timestampMs - right.timestampMs);
+  if (notices.length === 0) {
+    return messages;
+  }
+
+  const usedNoticeIds = new Set<string>();
+  const adjusted = new Map<string, ParsedDeliveryMessage>();
+  for (const message of [...messages].sort((left, right) => left.timestampMs - right.timestampMs)) {
+    if (message.status !== 'ridicat' || message.paidQuantity !== 1 || message.period !== 'night') {
+      continue;
+    }
+
+    const cutoffMs = nightTariffCutoffBefore(message.timestampMs);
+    const candidate = [...notices]
+      .reverse()
+      .find((notice) =>
+        !usedNoticeIds.has(notice.id) &&
+        notice.timestampMs < cutoffMs &&
+        cutoffMs - notice.timestampMs <= MAX_RESTAURANT_ORDER_TO_PICKUP_MINUTES * 60_000,
+      );
+    if (!candidate) {
+      continue;
+    }
+
+    usedNoticeIds.add(candidate.id);
+    adjusted.set(message.id, {
+      ...message,
+      period: 'day',
+      reportDayKey: reportDayKey(candidate.timestampMs),
+      tariffSourceLineId: candidate.id,
+      tariffSourceLineNumber: candidate.lineNumber,
+      tariffSourceTimestampIso: candidate.timestampIso,
+    });
+  }
+
+  return messages.map((message) => adjusted.get(message.id) ?? message);
+}
+
+/**
+ * Programul restaurantului filtreaza comenzile create in afara programului.
+ * Livrarile din maximum trei ore de la o ridicare valida raman disponibile pentru
+ * imperechere, inclusiv cand livrarea trece putin dupa ora de inchidere.
+ */
+export function filterMessagesForRestaurantSchedule(
+  messages: ParsedDeliveryMessage[],
+  schedule?: RestaurantSchedule,
+): ParsedDeliveryMessage[] {
+  if (!schedule) {
+    return messages;
+  }
+
+  const inSchedulePickups = messages.filter(
+    (message) => message.status === 'ridicat' && isWithinRestaurantSchedule(message.timestampMs, schedule),
+  );
+  const validPickupByCourier = new Map<string, number[]>();
+  for (const pickup of inSchedulePickups) {
+    const courierId = normalizeCourierIdentity(pickup.senderRaw);
+    const current = validPickupByCourier.get(courierId) ?? [];
+    current.push(pickup.timestampMs);
+    validPickupByCourier.set(courierId, current);
+  }
+
+  return messages.filter((message) => {
+    if (message.status === 'ridicat') {
+      return isWithinRestaurantSchedule(message.timestampMs, schedule);
+    }
+    if (message.status !== 'livrat') {
+      return isWithinRestaurantSchedule(message.timestampMs, schedule);
+    }
+    const pickups = validPickupByCourier.get(normalizeCourierIdentity(message.senderRaw)) ?? [];
+    return pickups.some(
+      (pickupMs) =>
+        message.timestampMs >= pickupMs &&
+        message.timestampMs - pickupMs <= MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES * 60_000,
+    );
+  });
+}
+
+function isWithinRestaurantSchedule(timestampMs: number, schedule: RestaurantSchedule): boolean {
+  const openingMinutes = parseScheduleMinutes(schedule.openingTime);
+  const closingMinutes = parseScheduleMinutes(schedule.closingTime);
+  if (openingMinutes === null || closingMinutes === null) {
+    return true;
+  }
+  const date = new Date(timestampMs);
+  const currentMinutes = date.getHours() * 60 + date.getMinutes();
+  if (schedule.closesNextDay || closingMinutes < openingMinutes) {
+    return currentMinutes >= openingMinutes || currentMinutes <= closingMinutes;
+  }
+  return currentMinutes >= openingMinutes && currentMinutes <= closingMinutes;
+}
+
+function parseScheduleMinutes(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 ? hours * 60 + minutes : null;
+}
+
 export function buildScanReport(
   messages: ParsedDeliveryMessage[],
   interval: ScanInterval,
@@ -232,6 +358,7 @@ export function buildScanReport(
   const restaurantSummaries = new Map<string, RestaurantSummary>();
   const dailySummaries = new Map<string, DailyCourierSummary>();
   const workSummaries = new Map<string, WorkHoursSummary>();
+  const metricSources = new Map<string, MetricSourceRecord>();
   const pickupQueues = new Map<string, DeliveryPickup[]>();
   const reviewRows: ReviewRow[] = [];
 
@@ -346,16 +473,24 @@ export function buildScanReport(
     if (message.status === 'ridicat') {
       const paidUnits = buildPaidUnits(message);
       if (scanOptions.scanOrders) {
-        for (const unit of paidUnits) {
+        for (const [index, unit] of paidUnits.entries()) {
           applyPaidUnitToSummaries(summary, restaurantSummary, dailySummary, message.period, unit, 1);
+          const metricSourceId = `metric-${message.id}-${index}`;
+          metricSources.set(metricSourceId, createMetricSourceRecord(
+            metricSourceId,
+            message,
+            displayName,
+            unit,
+          ));
         }
       }
       if (scanOptions.scanOrders || scanOptions.scanDeliveryTimes) {
         const queueKey = deliveryQueueKey(message.restaurantName, courierId);
         const queue = pickupQueues.get(queueKey) ?? [];
-        queue.push(...paidUnits.map((unit) => ({
+        queue.push(...paidUnits.map((unit, index) => ({
           timestampMs: message.timestampMs,
           messageId: message.id,
+          metricSourceId: scanOptions.scanOrders ? `metric-${message.id}-${index}` : undefined,
           period: message.period,
           classification: unit,
         })));
@@ -391,6 +526,9 @@ export function buildScanReport(
                 displayName,
                 reviewRows,
               );
+            }
+            if (pickupMatch) {
+              updateMetricSourceDelivery(metricSources, pickupMatch.pickup, message);
             }
           }
 
@@ -817,8 +955,55 @@ export function buildScanReport(
         a.courierName.localeCompare(b.courierName, 'ro-RO'),
     ),
     workSummaries: workRows,
+    metricSources: Array.from(metricSources.values()).sort(
+      (left, right) =>
+        left.pickupTimestampIso.localeCompare(right.pickupTimestampIso) || left.id.localeCompare(right.id),
+    ),
     reviewRows,
   };
+}
+
+function createMetricSourceRecord(
+  id: string,
+  pickup: ParsedDeliveryMessage,
+  courierName: string,
+  unit: PaidUnitClassification,
+): MetricSourceRecord {
+  return {
+    id,
+    period: pickup.period,
+    classification: metricClassification(unit),
+    restaurantId: pickup.restaurantId,
+    restaurantName: pickup.restaurantName,
+    courierName,
+    dayKey: pickup.reportDayKey,
+    pickupMessageId: pickup.id,
+    pickupSourceId: pickup.sourceId,
+    pickupLineNumber: pickup.lineNumber,
+    pickupTimestampIso: pickup.timestampIso,
+    pickupMessage: pickup.originalMessage,
+  };
+}
+
+function updateMetricSourceDelivery(
+  metricSources: Map<string, MetricSourceRecord>,
+  pickup: DeliveryPickup,
+  delivery: ParsedDeliveryMessage,
+): void {
+  if (!pickup.metricSourceId) return;
+  const source = metricSources.get(pickup.metricSourceId);
+  if (!source) return;
+  source.classification = metricClassification(pickup.classification);
+  source.deliveryMessageId = delivery.id;
+  source.deliverySourceId = delivery.sourceId;
+  source.deliveryLineNumber = delivery.lineNumber;
+  source.deliveryTimestampIso = delivery.timestampIso;
+  source.deliveryMessage = delivery.originalMessage;
+}
+
+function metricClassification(unit: PaidUnitClassification): MetricSourceRecord['classification'] {
+  if (unit.kind === 'outside') return 'special';
+  return `zone${unit.zone}` as MetricSourceRecord['classification'];
 }
 
 function normalizeScanOptions(options: ScanOptions): ScanOptions {
@@ -1328,6 +1513,37 @@ function toConversationLine(
   };
 }
 
+function isLikelyRestaurantOrderNotice(
+  line: ConversationLine,
+  courierIdentities: Set<string>,
+): boolean {
+  if (!line.senderRaw || !Number.isFinite(line.timestampMs)) {
+    return false;
+  }
+  if (courierIdentities.has(normalizeCourierIdentity(line.senderRaw))) {
+    return false;
+  }
+
+  const message = line.message.trim();
+  if (!message) {
+    return false;
+  }
+  const hasOrderDetail =
+    RESTAURANT_ORDER_ADDRESS_REGEX.test(message) ||
+    RESTAURANT_ORDER_PHONE_REGEX.test(message) ||
+    message.split('\n').filter(Boolean).length >= 2;
+  return hasOrderDetail && message.length >= 24;
+}
+
+function nightTariffCutoffBefore(timestampMs: number): number {
+  const cutoff = new Date(timestampMs);
+  cutoff.setHours(23, 0, 0, 0);
+  if (timestampMs < cutoff.getTime()) {
+    cutoff.setDate(cutoff.getDate() - 1);
+  }
+  return cutoff.getTime();
+}
+
 function parseRomanianTimestamp(date: string, time: string): number {
   const [day, month, year] = date.split('.').map(Number);
   const [hour, minute] = time.split(':').map(Number);
@@ -1458,22 +1674,29 @@ function detectAvailability(message: string): {
   reviewReasons: string[];
 } | null {
   const normalized = normalizeWord(message);
-  if (!AVAILABILITY_REGEX.test(normalized)) {
+  const correctedAvailability = detectAvailabilityTypo(normalized);
+  if (!AVAILABILITY_REGEX.test(normalized) && !correctedAvailability) {
     return null;
   }
   AVAILABILITY_REGEX.lastIndex = 0;
 
   const reviewReasons: string[] = [];
-  const negatedAvailability = /\bnu\b[^.?!\n]{0,30}\bdisponibil\b/.test(normalized);
+  const availabilityText = correctedAvailability
+    ? `${normalized} ${correctedAvailability}`
+    : normalized;
+  if (correctedAvailability) {
+    reviewReasons.push(`Corectat automat ca ${correctedAvailability}; verifica mesajul original.`);
+  }
+  const negatedAvailability = /\bnu\b[^.?!\n]{0,30}\b(?:disponibil|online)\b/.test(availabilityText);
   const scheduledAvailability =
     /\b(?:voi\s+fi|o\s+sa\s+fiu|o\s+sa\s+fi|o\s+să\s+fiu|o\s+să\s+fi|dupa\s+ora|dupa\s+\d|de\s+la|pana\s+la|până\s+la|in\s+\d{1,2}(?:[-\s]\d{1,2})?\s*(?:min|minute|ore|h))\b/.test(
       normalized,
     );
-  const hasUnavailable = /\b(indisponibil|indisp)\b/.test(normalized) || negatedAvailability;
-  const hasAvailable = /\b(disponibil|disp)\b/.test(normalized) && !hasUnavailable;
+  const hasUnavailable = /\b(indisponibil|indisp|offline)\b/.test(availabilityText) || negatedAvailability;
+  const hasAvailable = /\b(disponibil|disp|online)\b/.test(availabilityText) && !hasUnavailable;
 
-  if (hasUnavailable && /\bdisponibil\b/.test(normalized) && !negatedAvailability) {
-    reviewReasons.push('Mesajul contine disponibil si indisponibil; verifica manual intentia.');
+  if (hasUnavailable && /\b(?:disponibil|online)\b/.test(normalized) && !negatedAvailability) {
+    reviewReasons.push('Mesajul contine stari opuse de pontaj; verifica manual intentia.');
   }
 
   if (negatedAvailability) {
@@ -1504,6 +1727,26 @@ function detectAvailability(message: string): {
     };
   }
 
+  return null;
+}
+
+function detectAvailabilityTypo(normalizedMessage: string): (typeof AVAILABILITY_WORDS)[number] | null {
+  for (const match of normalizedMessage.matchAll(WORD_REGEX)) {
+    const word = normalizeWord(match[0]);
+    for (const expected of AVAILABILITY_WORDS) {
+      if (word === expected) {
+        continue;
+      }
+      const maxDistance = expected.length >= 10 ? 2 : 1;
+      if (
+        word[0] === expected[0] &&
+        Math.abs(word.length - expected.length) <= 1 &&
+        levenshteinDistance(word, expected) <= maxDistance
+      ) {
+        return expected;
+      }
+    }
+  }
   return null;
 }
 
