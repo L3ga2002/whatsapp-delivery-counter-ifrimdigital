@@ -80,9 +80,11 @@ describe('restaurant workbook export', () => {
     );
     const sheet = workbook.getWorksheet('Restaurant Alfa');
     const headerRow = sheet?.findRow(7);
-    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total comenzi', 'Zona 1', 'Zona 2', 'Zona 3', 'Comenzi speciale']));
-    expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Total comenzi noapte', 'Comenzi speciale noapte', 'Review']));
+    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total\ncomenzi\nzi', 'Zona 1\nzi', 'Zona 2\nzi', 'Zona 3\nzi', 'Comenzi\nspeciale\nzi']));
+    expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Total\ncomenzi\nnoapte', 'Comenzi\nspeciale\nnoapte', 'Review']));
     expect(sheet?.columnCount).toBe(10);
+    expect(headerRow?.height).toBeGreaterThanOrEqual(54);
+    expect(headerRow?.getCell(2).alignment?.wrapText).toBe(true);
   });
 
   it('adds a separate readable night block for a restaurant that closes after midnight', () => {
@@ -109,9 +111,9 @@ describe('restaurant workbook export', () => {
     const headerRow = sheet?.findRow(7);
     expect(report.totalPickedUp).toBe(0);
     expect(report.totalNightPickedUp).toBe(1);
-    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total comenzi noapte', 'Zona 2 noapte', 'Comenzi speciale noapte']));
+    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total\nzi +\nnoapte', 'Total\ncomenzi\nnoapte', 'Zona 2\nnoapte', 'Comenzi\nspeciale\nnoapte']));
     expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Review']));
-    expect(sheet?.columnCount).toBe(15);
+    expect(sheet?.columnCount).toBe(16);
   });
 
   it('serializes the simplified restaurant workbook without Excel repair warnings', async () => {

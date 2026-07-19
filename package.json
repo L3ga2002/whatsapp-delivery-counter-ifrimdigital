@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-delivery-counter-ifrimdigital",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "private": true,
   "author": "IfrimDigital",
   "description": "Windows desktop app for counting courier activity from exported WhatsApp chats.",
@@ -19,7 +19,7 @@
     "prepare:assets": "node tools/generate-icon.mjs",
     "clean:release": "node tools/clean-release.mjs",
     "pack:win": "npm run clean:release && npm run prepare:assets && electron-builder --win --publish never",
-    "publish:github": "npm run clean:release && npm run prepare:assets && electron-builder --win --publish always",
+    "publish:github": "node tools/publish-github-release.mjs",
     "hash:release": "node tools/hash-release.mjs",
     "verify:release": "npm test -- --run && npm run build && npm run pack:win && npm run hash:release",
     "dist:win": "npm run verify:release"

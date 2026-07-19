@@ -2373,10 +2373,10 @@ function SummaryTable({
 }): JSX.Element {
   return (
     <div className="table-wrap">
-      <table>
+      <table className="report-table report-table--summary">
         <thead>
           <tr>
-            <th>Curier</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Spec. zi</th><th>Lei spec. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp mediu</th><th>Ore</th><th>Dif</th><th>Review</th>
+            <th>Curier</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Spec. zi</th><th>Lei spec. zi</th><th className="report-col--night">Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th className="report-col--audit">Ridicat</th><th>Livrat</th><th>Timp mediu</th><th>Ore</th><th>Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2389,13 +2389,13 @@ function SummaryTable({
               <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td className="report-col--night"><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
-              <td>{row.pickedUp + row.nightPickedUp}</td>
+              <td className="report-col--audit">{row.pickedUp + row.nightPickedUp}</td>
               <td>{row.delivered + row.nightDelivered}</td>
               <td>{formatDurationMinutes(row.averageDeliveryMinutes)}</td>
               <td>{formatWorkMinutes(row.workMinutes)}</td>
@@ -2534,10 +2534,10 @@ function openMetricSource(
 function NightExternalTable({ report, onOpenSource }: { report: ScanReport; onOpenSource: (source: MetricSourceRecord) => void }): JSX.Element {
   return (
     <div className="table-wrap">
-      <table>
+      <table className="report-table report-table--night">
         <thead>
           <tr>
-            <th>Curier</th><th>Spec. zi</th><th>Lei spec. zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th>Dif</th><th>Review</th>
+            <th>Curier</th><th>Spec. zi</th><th>Lei spec. zi</th><th className="report-col--night">Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Spec. noapte</th><th>Lei spec. noapte</th><th className="report-col--audit">Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2546,13 +2546,13 @@ function NightExternalTable({ report, onOpenSource }: { report: ScanReport; onOp
               <td><strong>{row.displayName}</strong><span>{row.senderAliases.join(', ')}</span></td>
               <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
+              <td className="report-col--night"><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.displayName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
-              <td className={row.difference === 0 ? 'balanced' : 'warning-text'}>{row.difference}</td>
+              <td className={`report-col--audit ${row.difference === 0 ? 'balanced' : 'warning-text'}`}>{row.difference}</td>
               <td>{row.unclearCount + row.workReviewCount}</td>
             </tr>
           ))}
@@ -2590,10 +2590,10 @@ function DeliveryTimesTable({ report }: { report: ScanReport }): JSX.Element {
 function RestaurantTable({ report, onOpenSource }: { report: ScanReport; onOpenSource: (source: MetricSourceRecord) => void }): JSX.Element {
   return (
     <div className="table-wrap">
-      <table>
+      <table className="report-table report-table--restaurant">
         <thead>
           <tr>
-            <th>Restaurant</th><th>Curieri</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th>Lei speciale zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th>Lei speciale noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Dif</th><th>Review</th>
+            <th>Restaurant</th><th>Curieri</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th>Lei speciale zi</th><th className="report-col--night">Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th>Lei speciale noapte</th><th className="report-col--audit">Ridicat</th><th>Livrat</th><th>Timp</th><th>Dif</th><th>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -2607,13 +2607,13 @@ function RestaurantTable({ report, onOpenSource }: { report: ScanReport; onOpenS
               <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.outsideAmountLei)}</td>
-              <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
+              <td className="report-col--night"><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} /></td>
               <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ restaurantName: row.restaurantName }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
               <td>{formatCurrencyValue(row.nightOutsideAmountLei)}</td>
-              <td>{row.pickedUp + row.nightPickedUp}</td>
+              <td className="report-col--audit">{row.pickedUp + row.nightPickedUp}</td>
               <td>{row.delivered + row.nightDelivered}</td>
               <td>{formatDurationMinutes(row.averageDeliveryMinutes)}</td>
               <td className={row.difference === 0 && row.nightDifference === 0 ? 'balanced' : 'warning-text'}>{row.difference + row.nightDifference}</td>
@@ -2643,9 +2643,9 @@ function DailyCourierTable({ report, rows, onOpenSource }: { report: ScanReport;
                 <span>{restaurant.rows.length} livrator(i)</span>
               </div>
               <div className="table-wrap compact-table">
-                <table>
+                <table className="report-table report-table--daily">
                   <thead>
-                    <tr><th>Livrator</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th>Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th>Ridicat</th><th>Livrat</th><th>Timp</th><th>Rev</th></tr>
+                    <tr><th>Livrator</th><th>Total zi</th><th>Z1 zi</th><th>Z2 zi</th><th>Z3 zi</th><th>Speciale zi</th><th className="report-col--night">Total noapte</th><th>N Z1</th><th>N Z2</th><th>N Z3</th><th>Speciale noapte</th><th className="report-col--audit">Ridicat</th><th>Livrat</th><th>Timp</th><th>Rev</th></tr>
                   </thead>
                   <tbody>
                     {restaurant.rows.map((row) => (
@@ -2656,12 +2656,12 @@ function DailyCourierTable({ report, rows, onOpenSource }: { report: ScanReport;
                         <td><MetricSourceButton report={report} value={row.zoneCounts.zone2} metric="dayZone2" label="Z2 zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.zoneCounts.zone3} metric="dayZone3" label="Z3 zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.outsideZoneDeliveries} metric="daySpecial" label="Comenzi speciale zi" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.outsideZoneDeliveries, row.outsideKilometers)} /></td>
-                        <td><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
+                        <td className="report-col--night"><MetricSourceButton report={report} value={row.nightPickedUp} metric="nightTotal" label="Total noapte" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone1} metric="nightZone1" label="N Z1" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone2} metric="nightZone2" label="N Z2" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.nightZoneCounts.zone3} metric="nightZone3" label="N Z3" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} /></td>
                         <td><MetricSourceButton report={report} value={row.nightOutsideZoneDeliveries} metric="nightSpecial" label="Comenzi speciale noapte" filter={{ courierName: row.courierName, restaurantName: row.restaurantName, dayKey: row.dayKey }} onOpenSource={onOpenSource} formatter={() => formatOutsideCount(row.nightOutsideZoneDeliveries, row.nightOutsideKilometers)} /></td>
-                        <td>{row.pickedUp + row.nightPickedUp}</td>
+                        <td className="report-col--audit">{row.pickedUp + row.nightPickedUp}</td>
                         <td>{row.delivered + row.nightDelivered}</td>
                         <td>{formatDurationMinutes(row.averageDeliveryMinutes)}</td>
                         <td>{row.reviewCount}</td>
@@ -3216,7 +3216,7 @@ function addProfessionalDailySheet(
   const sheet = workbook.addWorksheet(uniqueWorksheetName(workbook, sheetName), {
     views: [{ state: 'frozen', ySplit: 4 }],
   });
-  const columnCount = includeNightColumns ? 15 : 10;
+  const columnCount = includeNightColumns ? 16 : 10;
   const dayColumns = [
     { width: 32 },
     { width: 16 },
@@ -3233,8 +3233,9 @@ function addProfessionalDailySheet(
     { width: 17 },
     { width: 24 },
   ];
+  const combinedTotalColumn = [{ width: 18 }];
   sheet.columns = includeNightColumns
-    ? [...dayColumns, ...nightColumns, ...auditColumns]
+    ? [...dayColumns, ...combinedTotalColumn, ...nightColumns, ...auditColumns]
     : [...dayColumns, ...auditColumns];
   sheet.pageSetup = {
     orientation: 'landscape',
@@ -3374,9 +3375,9 @@ function addProfessionalDailySheet(
           shouldShowWorkHours ? formatWorkMinutes(workMinutes) : '',
         ];
         excelRow.values = includeNightColumns
-          ? [...dayValues, ...nightValues, ...auditValues]
+          ? [...dayValues, dailyRow.pickedUp + dailyRow.nightPickedUp, ...nightValues, ...auditValues]
           : [...dayValues, ...auditValues];
-        styleProfessionalDataRow(excelRow, rowNumber);
+        styleProfessionalDataRow(excelRow, rowNumber, includeNightColumns);
         rowNumber += 1;
       }
 
@@ -3818,36 +3819,46 @@ function addProfessionalHeaderRow(
   const row = sheet.getRow(rowNumber);
   const dayHeaders = [
     'Livrator',
-    'Total comenzi',
-    'Zona 1',
-    'Zona 2',
-    'Zona 3',
-    'Comenzi speciale',
+    'Total\ncomenzi\nzi',
+    'Zona 1\nzi',
+    'Zona 2\nzi',
+    'Zona 3\nzi',
+    'Comenzi\nspeciale\nzi',
   ];
+  const combinedTotalHeader = ['Total\nzi +\nnoapte'];
   const nightHeaders = [
-    'Total comenzi noapte',
-    'Zona 1 noapte',
-    'Zona 2 noapte',
-    'Zona 3 noapte',
-    'Comenzi speciale noapte',
+    'Total\ncomenzi\nnoapte',
+    'Zona 1\nnoapte',
+    'Zona 2\nnoapte',
+    'Zona 3\nnoapte',
+    'Comenzi\nspeciale\nnoapte',
   ];
   const auditHeaders = [
     'Ridicat',
     'Livrat',
-    'Timp livrare',
-    'Ore lucrate',
+    'Timp\nlivrare',
+    'Ore\nlucrate',
   ];
   row.values = includeNightColumns
-    ? [...dayHeaders, ...nightHeaders, ...auditHeaders]
+    ? [...dayHeaders, ...combinedTotalHeader, ...nightHeaders, ...auditHeaders]
     : [...dayHeaders, ...auditHeaders];
-  row.height = 38;
-  row.eachCell((cell) => {
+  row.height = 54;
+  row.eachCell((cell, columnNumber) => {
+    const isNightTotal = includeNightColumns && columnNumber === 8;
+    const isBoundary = includeNightColumns
+      ? columnNumber === 7 || columnNumber === 8 || columnNumber === 13
+      : columnNumber === 7;
     cell.font = { bold: true, color: { argb: 'FF526273' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F9FB' } };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: isNightTotal ? 'FFF1F5F8' : columnNumber === 7 && includeNightColumns ? 'FFFFF5E8' : 'FFF7F9FB' },
+    };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = {
       top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
       bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      ...(isBoundary ? { left: { style: 'medium', color: { argb: 'FFC8D3DD' } } } : {}),
     };
   });
   row.getCell(1).alignment = { vertical: 'middle', horizontal: 'left' };
@@ -3876,12 +3887,18 @@ function stylePayrollDataRow(row: ExcelJS.Row, rowNumber: number): void {
   }
 }
 
-function styleProfessionalDataRow(row: ExcelJS.Row, rowNumber: number): void {
+function styleProfessionalDataRow(row: ExcelJS.Row, rowNumber: number, includeNightColumns: boolean): void {
   row.height = 22;
   const fillColor = rowNumber % 2 === 0 ? 'FFFFFFFF' : 'FFFBFCFD';
   row.eachCell((cell, columnNumber) => {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
-    cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+    const isBoundary = includeNightColumns
+      ? columnNumber === 7 || columnNumber === 8 || columnNumber === 13
+      : columnNumber === 7;
+    cell.border = {
+      bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      ...(isBoundary ? { left: { style: 'thin', color: { argb: 'FFD4DEE6' } } } : {}),
+    };
     cell.alignment = {
       vertical: 'middle',
       horizontal: columnNumber === 1 ? 'left' : 'center',

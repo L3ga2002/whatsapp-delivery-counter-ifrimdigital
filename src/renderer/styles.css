@@ -1613,6 +1613,41 @@ select:focus {
   background: rgba(250, 247, 243, 0.42);
 }
 
+/* Grupeaza vizual metricile de zi, noapte si audit fara o grila apasatoare. */
+.result-workspace .report-table--summary {
+  min-width: 1680px;
+}
+
+.result-workspace .report-table--restaurant {
+  min-width: 1620px;
+}
+
+.result-workspace .report-table--daily {
+  min-width: 1280px;
+}
+
+.result-workspace .report-table--night {
+  min-width: 1060px;
+}
+
+.result-workspace .table-wrap .report-col--night {
+  border-left: 2px solid #c9d5de;
+}
+
+.result-workspace .table-wrap .report-col--audit {
+  border-left: 2px solid #e5c29a;
+}
+
+.result-workspace .table-wrap th.report-col--night {
+  background: #f1f6f8;
+  color: #42596a;
+}
+
+.result-workspace .table-wrap th.report-col--audit {
+  background: #fff7ed;
+  color: #8b4c16;
+}
+
 .table-wrap th {
   color: #5b6876;
   font-size: 0.78rem;
