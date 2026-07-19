@@ -1603,6 +1603,16 @@ select:focus {
   vertical-align: top;
 }
 
+/* Pastreaza citirea rand-cu-rand in tabelele dense de raport, fara un grid agresiv. */
+.result-workspace .table-wrap th + th,
+.result-workspace .table-wrap td + td {
+  border-left: 1px solid #edf1f4;
+}
+
+.result-workspace .table-wrap tbody tr:nth-child(even) td {
+  background: rgba(250, 247, 243, 0.42);
+}
+
 .table-wrap th {
   color: #5b6876;
   font-size: 0.78rem;

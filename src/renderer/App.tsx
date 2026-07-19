@@ -3014,7 +3014,7 @@ export function buildReportWorkbook(
   report: ScanReport,
   excel: typeof ExcelJS,
   options: ExportOptions,
-  _restaurants: Restaurant[],
+  restaurants: Restaurant[],
   _couriers: Courier[] = [],
   _settings?: AppSettings,
 ): ExcelJS.Workbook {
@@ -3024,7 +3024,7 @@ export function buildReportWorkbook(
   workbook.calcProperties.fullCalcOnLoad = true;
 
   if (options.scope === 'full' || options.scope === 'restaurants') {
-    addRestaurantProfessionalSheets(workbook, report);
+    addRestaurantProfessionalSheets(workbook, report, restaurants);
   } else if (options.scope === 'global') {
     addGlobalSheet(workbook, report);
   } else if (options.scope === 'workHours') {
@@ -3211,29 +3211,31 @@ function addProfessionalDailySheet(
   report: ScanReport,
   sheetName: string,
   rows: DailyCourierSummary[],
+  includeNightColumns: boolean,
 ): void {
   const sheet = workbook.addWorksheet(uniqueWorksheetName(workbook, sheetName), {
     views: [{ state: 'frozen', ySplit: 4 }],
   });
-  const columnCount = 16;
-  sheet.columns = [
+  const columnCount = includeNightColumns ? 15 : 10;
+  const dayColumns = [
     { width: 32 },
-    { width: 11 },
-    { width: 9 },
-    { width: 9 },
-    { width: 9 },
-    { width: 14 },
-    { width: 14 },
-    { width: 9 },
-    { width: 9 },
-    { width: 9 },
-    { width: 20 },
-    { width: 10 },
-    { width: 10 },
-    { width: 13 },
-    { width: 13 },
-    { width: 8 },
+    { width: 16 },
+    { width: 12 },
+    { width: 12 },
+    { width: 12 },
+    { width: 19 },
   ];
+  const auditColumns = [{ width: 11 }, { width: 11 }, { width: 20 }, { width: 17 }];
+  const nightColumns = [
+    { width: 20 },
+    { width: 17 },
+    { width: 17 },
+    { width: 17 },
+    { width: 24 },
+  ];
+  sheet.columns = includeNightColumns
+    ? [...dayColumns, ...nightColumns, ...auditColumns]
+    : [...dayColumns, ...auditColumns];
   sheet.pageSetup = {
     orientation: 'landscape',
     fitToPage: true,
@@ -3251,9 +3253,8 @@ function addProfessionalDailySheet(
   const sheetTotalDay = sum(rows, 'pickedUp');
   const sheetTotalNight = sum(rows, 'nightPickedUp');
   const sheetRestaurantCount = new Set(rows.map((row) => row.restaurantName)).size;
-  const sheetReviewCount = rows.reduce((total, row) => total + row.reviewCount, 0);
 
-  addMergedRow(sheet, 1, 1, columnCount, 'IFRIMDIGITAL - Raport pe zile', {
+  addMergedRow(sheet, 1, 1, columnCount, `IFRIMDIGITAL - ${sheetName}`, {
     font: { bold: true, size: 17, color: { argb: 'FFFFFFFF' } },
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173449' } },
     alignment: { vertical: 'middle', horizontal: 'left' },
@@ -3277,7 +3278,9 @@ function addProfessionalDailySheet(
     3,
     1,
     columnCount,
-    `Total zi: ${sheetTotalDay} | Total noapte: ${sheetTotalNight} | Restaurante: ${sheetRestaurantCount} | Review: ${sheetReviewCount}`,
+    includeNightColumns
+      ? `Total comenzi zi: ${sheetTotalDay} | Total comenzi noapte: ${sheetTotalNight} | Restaurante: ${sheetRestaurantCount}`
+      : `Total comenzi: ${sheetTotalDay} | Restaurante: ${sheetRestaurantCount}`,
     {
       font: { bold: true, color: { argb: 'FF0C7B63' } },
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F9FB' } },
@@ -3309,7 +3312,9 @@ function addProfessionalDailySheet(
       rowNumber,
       1,
       columnCount,
-      `${capitalizeLabel(compactDayLabel)}    Zi: ${sum(group.rows, 'pickedUp')} - Noapte: ${sum(group.rows, 'nightPickedUp')}`,
+        includeNightColumns
+          ? `${capitalizeLabel(compactDayLabel)}    Zi: ${sum(group.rows, 'pickedUp')} - Noapte: ${sum(group.rows, 'nightPickedUp')}`
+          : `${capitalizeLabel(compactDayLabel)}    Total comenzi: ${sum(group.rows, 'pickedUp')}`,
       {
         font: { bold: true, size: 12, color: { argb: 'FFFFFFFF' } },
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173449' } },
@@ -3335,7 +3340,7 @@ function addProfessionalDailySheet(
       );
       rowNumber += 1;
 
-      addProfessionalHeaderRow(sheet, rowNumber);
+      addProfessionalHeaderRow(sheet, rowNumber, includeNightColumns);
       rowNumber += 1;
 
       for (const dailyRow of restaurantGroup.rows) {
@@ -3347,24 +3352,30 @@ function addProfessionalDailySheet(
         }
 
         const excelRow = sheet.getRow(rowNumber);
-        excelRow.values = [
+        const dayValues = [
           dailyRow.courierName,
           dailyRow.pickedUp,
           dailyRow.zoneCounts.zone1,
           dailyRow.zoneCounts.zone2,
           dailyRow.zoneCounts.zone3,
           safeNumber(dailyRow.outsideZoneDeliveries),
+        ];
+        const nightValues = [
           dailyRow.nightPickedUp,
           dailyRow.nightZoneCounts.zone1,
           dailyRow.nightZoneCounts.zone2,
           dailyRow.nightZoneCounts.zone3,
           safeNumber(dailyRow.nightOutsideZoneDeliveries),
+        ];
+        const auditValues = [
           dailyRow.pickedUp + dailyRow.nightPickedUp,
           dailyRow.delivered + dailyRow.nightDelivered,
           formatDurationMinutes(dailyRow.averageDeliveryMinutes),
           shouldShowWorkHours ? formatWorkMinutes(workMinutes) : '',
-          dailyRow.reviewCount,
         ];
+        excelRow.values = includeNightColumns
+          ? [...dayValues, ...nightValues, ...auditValues]
+          : [...dayValues, ...auditValues];
         styleProfessionalDataRow(excelRow, rowNumber);
         rowNumber += 1;
       }
@@ -3379,6 +3390,7 @@ function addProfessionalDailySheet(
 function addRestaurantProfessionalSheets(
   workbook: ExcelJS.Workbook,
   report: ScanReport,
+  restaurants: Restaurant[],
 ): void {
   const restaurantGroups = Array.from(
     report.dailyCourierSummaries.reduce((groups, row) => {
@@ -3392,11 +3404,21 @@ function addRestaurantProfessionalSheets(
 
   for (const [, rows] of restaurantGroups) {
     const restaurantName = rows[0].restaurantName;
+    const restaurantId = rows[0].restaurantId;
+    const restaurant = restaurants.find((item) => item.id === restaurantId)
+      ?? restaurants.find((item) => item.name === restaurantName);
+    const includesNightData = rows.some((row) => row.nightPickedUp > 0 || row.nightDelivered > 0);
+    // Forma foii urmeaza programul configurat. O livrare pastrata pentru imperechere
+    // dupa inchiderea unui restaurant de zi nu trebuie sa introduca rubrici de noapte.
+    const includeNightColumns = restaurant
+      ? restaurant.schedule.closesNextDay
+      : includesNightData;
     addProfessionalDailySheet(
       workbook,
       report,
       restaurantName,
       rows,
+      includeNightColumns,
     );
   }
 }
@@ -3788,26 +3810,36 @@ function addMergedRow(
   if (style.height) row.height = style.height;
 }
 
-function addProfessionalHeaderRow(sheet: ExcelJS.Worksheet, rowNumber: number): void {
+function addProfessionalHeaderRow(
+  sheet: ExcelJS.Worksheet,
+  rowNumber: number,
+  includeNightColumns: boolean,
+): void {
   const row = sheet.getRow(rowNumber);
-  row.values = [
+  const dayHeaders = [
     'Livrator',
-    'Total zi',
-    'Z1 zi',
-    'Z2 zi',
-    'Z3 zi',
-    'Speciale zi',
-    'Total noapte',
-    'N Z1',
-    'N Z2',
-    'N Z3',
-    'Speciale noapte',
+    'Total comenzi',
+    'Zona 1',
+    'Zona 2',
+    'Zona 3',
+    'Comenzi speciale',
+  ];
+  const nightHeaders = [
+    'Total comenzi noapte',
+    'Zona 1 noapte',
+    'Zona 2 noapte',
+    'Zona 3 noapte',
+    'Comenzi speciale noapte',
+  ];
+  const auditHeaders = [
     'Ridicat',
     'Livrat',
-    'Timp',
+    'Timp livrare',
     'Ore lucrate',
-    'Rev',
   ];
+  row.values = includeNightColumns
+    ? [...dayHeaders, ...nightHeaders, ...auditHeaders]
+    : [...dayHeaders, ...auditHeaders];
   row.height = 38;
   row.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: 'FF526273' } };

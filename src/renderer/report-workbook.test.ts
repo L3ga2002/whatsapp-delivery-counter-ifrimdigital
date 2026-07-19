@@ -1,7 +1,26 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { buildScanReport, parseWhatsAppExport } from '../shared/parser';
+import type { Restaurant } from '../shared/types';
 import { buildReportWorkbook } from './App';
+
+function restaurant(id: string, name: string, closesNextDay = false): Restaurant {
+  return {
+    id,
+    name,
+    aliases: [],
+    schedule: {
+      openingTime: '10:00',
+      closingTime: closesNextDay ? '03:00' : '23:00',
+      closesNextDay,
+      usesRestaurantOrderTimeForNightTariff: closesNextDay,
+    },
+    isActive: true,
+    notes: '',
+    createdAtIso: '2026-07-15T00:00:00.000Z',
+    updatedAtIso: '2026-07-15T00:00:00.000Z',
+  };
+}
 
 function createTwoRestaurantReport() {
   const first = parseWhatsAppExport(
@@ -38,11 +57,11 @@ describe('restaurant workbook export', () => {
       createTwoRestaurantReport(),
       ExcelJS,
       { scope: 'full', restaurantIds: [] },
-      [],
+      [restaurant('restaurant-alfa', 'Restaurant Alfa'), restaurant('restaurant-beta', 'Restaurant Beta')],
     );
 
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['Restaurant Alfa', 'Restaurant Beta']);
-    expect(workbook.getWorksheet('Restaurant Alfa')?.getCell('A1').value).toBe('IFRIMDIGITAL - Raport pe zile');
+    expect(workbook.getWorksheet('Restaurant Alfa')?.getCell('A1').value).toBe('IFRIMDIGITAL - Restaurant Alfa');
   });
 
   it('does not depend on payroll settings for restaurant export', () => {
@@ -54,15 +73,56 @@ describe('restaurant workbook export', () => {
     )).not.toThrow();
   });
 
-  it('wraps the special night header and gives it enough width', () => {
+  it('omits all night columns for a restaurant with a day-only program', () => {
     const workbook = buildReportWorkbook(
-      createTwoRestaurantReport(), ExcelJS, { scope: 'full', restaurantIds: [] }, [],
+      createTwoRestaurantReport(), ExcelJS, { scope: 'full', restaurantIds: [] },
+      [restaurant('restaurant-alfa', 'Restaurant Alfa'), restaurant('restaurant-beta', 'Restaurant Beta')],
     );
     const sheet = workbook.getWorksheet('Restaurant Alfa');
     const headerRow = sheet?.findRow(7);
-    expect(sheet?.getColumn(11).width).toBeGreaterThanOrEqual(20);
-    expect(headerRow?.getCell(11).value).toBe('Speciale noapte');
-    expect(headerRow?.getCell(11).alignment?.wrapText).toBe(true);
+    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total comenzi', 'Zona 1', 'Zona 2', 'Zona 3', 'Comenzi speciale']));
+    expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Total comenzi noapte', 'Comenzi speciale noapte', 'Review']));
+    expect(sheet?.columnCount).toBe(10);
+  });
+
+  it('adds a separate readable night block for a restaurant that closes after midnight', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '16.07.2026, 00:30 - Ana: ridicat x1 zona 2',
+        '16.07.2026, 00:45 - Ana: livrat x1 zona 2',
+      ].join('\n'),
+      'Restaurant Noapte.txt',
+      undefined,
+      'Restaurant Noapte',
+    );
+    const report = buildScanReport(parsed.messages, {
+      fromIso: new Date(2026, 6, 15, 22, 0).toISOString(),
+      toIso: new Date(2026, 6, 16, 4, 0).toISOString(),
+    }, {});
+    const workbook = buildReportWorkbook(
+      report,
+      ExcelJS,
+      { scope: 'full', restaurantIds: [] },
+      [restaurant('restaurant-noapte', 'Restaurant Noapte', true)],
+    );
+    const sheet = workbook.getWorksheet('Restaurant Noapte');
+    const headerRow = sheet?.findRow(7);
+    expect(report.totalPickedUp).toBe(0);
+    expect(report.totalNightPickedUp).toBe(1);
+    expect(headerRow?.values).toEqual(expect.arrayContaining(['Total comenzi noapte', 'Zona 2 noapte', 'Comenzi speciale noapte']));
+    expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Review']));
+    expect(sheet?.columnCount).toBe(15);
+  });
+
+  it('serializes the simplified restaurant workbook without Excel repair warnings', async () => {
+    const workbook = buildReportWorkbook(
+      createTwoRestaurantReport(),
+      ExcelJS,
+      { scope: 'full', restaurantIds: [] },
+      [restaurant('restaurant-alfa', 'Restaurant Alfa'), restaurant('restaurant-beta', 'Restaurant Beta')],
+    );
+    const buffer = await workbook.xlsx.writeBuffer();
+    expect(buffer.byteLength).toBeGreaterThan(1_000);
   });
 
   it('keeps the global workbook available only through its dedicated scope', () => {

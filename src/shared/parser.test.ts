@@ -1108,6 +1108,53 @@ describe('scan report builder', () => {
     expect(report.totalNightPickedUp).toBe(0);
   });
 
+  it('retains 00:00-03:00 orders in an overnight restaurant report and anchors them to the operating night', () => {
+    const schedule = {
+      openingTime: '10:00', closingTime: '03:00', closesNextDay: true, usesRestaurantOrderTimeForNightTariff: true,
+    };
+    const standardNight = parseWhatsAppExport(
+      [
+        '31.05.2026, 00:30 - Ana: Ridicat x1 zona 2',
+        '31.05.2026, 00:45 - Ana: Livrat x1 zona 2',
+      ].join('\n'),
+      'Pizzeria noapte.txt',
+      undefined,
+      'Pizzeria noapte',
+    );
+    const standardReport = buildScanReport(
+      filterMessagesForRestaurantSchedule(standardNight.messages, schedule),
+      { fromIso: new Date(2026, 4, 30, 22, 0).toISOString(), toIso: new Date(2026, 4, 31, 4, 0).toISOString() },
+      {},
+    );
+    expect(standardReport.totalPickedUp).toBe(0);
+    expect(standardReport.totalNightPickedUp).toBe(1);
+    expect(standardReport.dailyCourierSummaries[0]).toMatchObject({ dayKey: '2026-05-30', nightPickedUp: 1 });
+
+    const priorDayOrder = parseWhatsAppExport(
+      [
+        '30.05.2026, 22:50 - Pizzeria Romana: Comanda noua, Strada Republicii 10, telefon 0740123456',
+        '31.05.2026, 00:30 - Ana: Ridicat x1',
+        '31.05.2026, 00:45 - Ana: Livrat x1',
+      ].join('\n'),
+      'Pizzeria Romana noapte.txt',
+      undefined,
+      'Pizzeria Romana',
+    );
+    const adjusted = applyRestaurantScheduleTariff(
+      filterMessagesForRestaurantSchedule(priorDayOrder.messages, schedule),
+      priorDayOrder.conversationLines,
+      schedule,
+    );
+    const adjustedReport = buildScanReport(
+      adjusted,
+      { fromIso: new Date(2026, 4, 30, 22, 0).toISOString(), toIso: new Date(2026, 4, 31, 4, 0).toISOString() },
+      {},
+    );
+    expect(adjustedReport.totalPickedUp).toBe(1);
+    expect(adjustedReport.totalNightPickedUp).toBe(0);
+    expect(adjustedReport.dailyCourierSummaries[0]).toMatchObject({ dayKey: '2026-05-30', pickedUp: 1 });
+  });
+
   it('uses each restaurant schedule for pickups while retaining a related delivery after closing', () => {
     const parsed = parseWhatsAppExport(
       [
