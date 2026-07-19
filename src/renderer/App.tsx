@@ -67,6 +67,9 @@ const defaultExportOptions: ExportOptions = {
   restaurantIds: [],
 };
 
+const scheduleHours = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
+const scheduleMinutes = Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, '0'));
+
 type ViewId = 'dashboard' | 'reports' | 'restaurants' | 'couriers' | 'settings';
 type Notice = { kind: 'error' | 'success' | 'info'; text: string } | null;
 type ImportRange = { fromIso: string; toIso: string; deliveryCount: number; availabilityCount: number };
@@ -248,13 +251,42 @@ export default function App(): JSX.Element {
     if (!confirmed) {
       return;
     }
+    const reportIdToRescan = selectedReport?.id;
+    const scanOptionsToUse = scanOptions;
     setIsBusy(true);
     try {
       await desktopApi.deleteCourier(courierId);
       await reloadWorkspace();
-      setNotice({ kind: 'success', text: 'Curier sters. Poti crea unul nou si reasocia identitatea WhatsApp corecta.' });
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge curierul.') });
+      return;
+    }
+
+    try {
+      if (reportIdToRescan) {
+        const rescanned = await withTimeout(
+          desktopApi.scanSavedReport(reportIdToRescan, scanOptionsToUse),
+          workspaceReloadTimeoutMs,
+          'Raportul nu a putut fi actualizat automat dupa stergerea curierului.',
+        );
+        setReport(rescanned);
+      } else {
+        setReport(null);
+      }
+      setActiveReviewRow(null);
+      setNotice({
+        kind: 'success',
+        text: reportIdToRescan
+          ? 'Curier sters. Raportul deschis a fost recalculat fara aliasurile lui.'
+          : 'Curier sters. La urmatoarea scanare, raportul nu va mai folosi aliasurile lui.',
+      });
+    } catch (error) {
+      setReport(null);
+      setActiveReviewRow(null);
+      setNotice({
+        kind: 'info',
+        text: `${getErrorMessage(error, 'Raportul nu a putut fi actualizat automat.')} Curierul a fost sters; raportul ramane draft si trebuie scanat manual.`,
+      });
     } finally {
       setIsBusy(false);
     }
@@ -638,10 +670,7 @@ export default function App(): JSX.Element {
             <p className="eyebrow large">IfrimDigital</p>
             <h1>Professional Reporting Workspace</h1>
           </div>
-          <button className="secondary-button" type="button" onClick={() => {
-            setIsBusy(false);
-            void reloadWorkspace();
-          }}>
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={() => void reloadWorkspace()}>
             <RefreshCw aria-hidden="true" />
             <span>Reincarca</span>
           </button>
@@ -861,8 +890,8 @@ function RestaurantsView({
         </div>
         <div className="form-grid two-columns">
           <label>Nume restaurant<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
-          <label>Deschide la<input type="time" value={draft.openingTime} onChange={(event) => setDraft((current) => ({ ...current, openingTime: event.target.value }))} /></label>
-          <label>Inchide la<input type="time" value={draft.closingTime} onChange={(event) => setDraft((current) => ({ ...current, closingTime: event.target.value }))} /></label>
+          <label>Deschide la<ScheduleTimePicker value={draft.openingTime} onChange={(value) => setDraft((current) => ({ ...current, openingTime: value }))} /></label>
+          <label>Inchide la<ScheduleTimePicker value={draft.closingTime} onChange={(value) => setDraft((current) => ({ ...current, closingTime: value }))} /></label>
           <label className="checkbox-field"><input type="checkbox" checked={draft.closesNextDay} onChange={(event) => setDraft((current) => ({ ...current, closesNextDay: event.target.checked }))} /><span>Programul trece dupa miezul noptii</span></label>
           {draft.closesNextDay ? <label className="checkbox-field"><input type="checkbox" checked={draft.usesRestaurantOrderTimeForNightTariff} onChange={(event) => setDraft((current) => ({ ...current, usesRestaurantOrderTimeForNightTariff: event.target.checked }))} /><span>Comenzile intrate in restaurant inainte de 23:00 raman tarif zi</span></label> : null}
         </div>
@@ -1070,6 +1099,31 @@ function CouriersView({
         disabled={isBusy}
       />
     </div>
+  );
+}
+
+function ScheduleTimePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element {
+  const [rawHour = '00', rawMinute = '00'] = value.split(':');
+  const hour = scheduleHours.includes(rawHour) ? rawHour : '00';
+  const minute = scheduleMinutes.includes(rawMinute) ? rawMinute : '00';
+  const update = (nextHour: string, nextMinute: string): void => onChange(`${nextHour}:${nextMinute}`);
+
+  return (
+    <span className="schedule-time-picker" aria-label={`Ora selectata ${hour}:${minute}`}>
+      <select aria-label="Ora" value={hour} onChange={(event) => update(event.target.value, minute)}>
+        {scheduleHours.map((option) => <option value={option} key={option}>{option}</option>)}
+      </select>
+      <span aria-hidden="true">:</span>
+      <select aria-label="Minute" value={minute} onChange={(event) => update(hour, event.target.value)}>
+        {scheduleMinutes.map((option) => <option value={option} key={option}>{option}</option>)}
+      </select>
+    </span>
   );
 }
 

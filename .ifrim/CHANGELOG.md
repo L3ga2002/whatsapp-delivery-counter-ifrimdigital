@@ -1,5 +1,12 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-20 - v0.3.19
+
+- Replaced the Windows-native restaurant schedule inputs with an explicit 24-hour selector: hours `00` through `23` and minutes `00` through `59`, independent of Windows AM/PM settings.
+- Deleting a courier now invalidates scanned, verified, and exported reports that may still contain that courier's WhatsApp identity, then safely recalculates the currently open report when possible.
+- Serialized local workspace saves and prevented reload actions during an active operation, reducing the risk of a temporary locked-input state or concurrent local persistence writes.
+- Added regression coverage for courier deletion across scanned, verified, and exported report states.
+
 ## 2026-07-20 - v0.3.18
 
 - Excluded inactive courier identities from the live alias map, preventing old aliases from grouping new scan rows under historical courier names.

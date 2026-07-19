@@ -117,6 +117,26 @@ describe('WorkspaceStore courier identity ownership', () => {
     });
   });
 
+  it('marks identity-dependent reports as draft after deleting a courier identity', async () => {
+    const store = await createStore();
+    const courier = await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });
+    const reports = await Promise.all((['scanned', 'verified', 'exported'] as const).map((status) =>
+      store.saveReport({
+        name: `Raport ${status}`,
+        fromIso: '2026-06-15T07:00:00.000Z',
+        toIso: '2026-06-22T01:00:00.000Z',
+        status,
+      }),
+    ));
+
+    await store.deleteCourier(courier.id);
+
+    for (const report of reports) {
+      expect(store.getReport(report.id)).toMatchObject({ status: 'draft', scannedAtIso: null });
+    }
+    expect(store.getAliasMap()).toEqual({});
+  });
+
   it('keeps scanned reports intact when only courier notes change', async () => {
     const store = await createStore();
     const courier = await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });

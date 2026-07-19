@@ -50,6 +50,7 @@ const defaultRestaurantSchedule = {
 export class WorkspaceStore {
   private sql: SqlJsStatic | null = null;
   private db: Database | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly userDataPath: string) {}
 
@@ -291,7 +292,7 @@ export class WorkspaceStore {
       this.run(
         `update reports
          set status = 'draft', scanned_at_iso = null, updated_at_iso = ?
-         where status in ('scanned', 'exported')`,
+         where status in ('scanned', 'verified', 'exported')`,
         [now],
       );
     }
@@ -305,6 +306,14 @@ export class WorkspaceStore {
       throw new Error('Curierul nu exista.');
     }
     this.run('delete from couriers where id = ?', [id]);
+    // Deleting a courier removes identities that may have grouped rows in a
+    // previous scan, so stored report results are no longer current.
+    this.run(
+      `update reports
+       set status = 'draft', scanned_at_iso = null, updated_at_iso = ?
+       where status in ('scanned', 'verified', 'exported')`,
+      [new Date().toISOString()],
+    );
     await this.save();
   }
 
@@ -774,7 +783,15 @@ export class WorkspaceStore {
     }
   }
 
-  private async save(): Promise<void> {
+  private save(): Promise<void> {
+    const scheduledSave = this.saveQueue.then(() => this.persist());
+    // Keep the queue alive after a failed disk write so the next explicit
+    // mutation can still report its own persistence error.
+    this.saveQueue = scheduledSave.catch(() => undefined);
+    return scheduledSave;
+  }
+
+  private async persist(): Promise<void> {
     const db = this.requireDb();
     const data = db.export();
     const dbPath = this.dbPath();

@@ -309,6 +309,25 @@ button {
   accent-color: var(--accent-orange);
 }
 
+.schedule-time-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.schedule-time-picker select {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-time-picker > span {
+  color: var(--brand-dark);
+  font-weight: 800;
+}
+
 .date-range-picker {
   display: grid;
   gap: 12px;
