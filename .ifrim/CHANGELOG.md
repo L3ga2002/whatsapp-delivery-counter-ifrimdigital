@@ -1,5 +1,12 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-07-20 - v0.3.18
+
+- Excluded inactive courier identities from the live alias map, preventing old aliases from grouping new scan rows under historical courier names.
+- Rescan the selected report after every courier save, including when the result view is temporarily unloaded.
+- Clarified the UI distinction between saved courier records and couriers detected in scanned WhatsApp conversations.
+- Added a regression test for inactive aliases and verified the Windows installer, portable build, and SHA-256 release hashes.
+
 ## 2026-07-15 - v0.3.14
 
 - Added an opt-in final salary workbook modeled on the client's XLSM calculations, using standard Excel formulas without requiring macros.

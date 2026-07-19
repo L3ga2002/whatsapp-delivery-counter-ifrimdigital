@@ -51,6 +51,25 @@ describe('WorkspaceStore legacy courier aliases', () => {
 });
 
 describe('WorkspaceStore courier identity ownership', () => {
+  it('excludes inactive courier aliases from new report scans', async () => {
+    const store = await createStore();
+    const activeCourier = await store.saveCourier({ name: 'Ana', phone: '', aliases: ['Ana WhatsApp'] });
+    const inactiveCourier = await store.saveCourier({ name: 'Bogdan vechi', phone: '', aliases: ['Bogdan WhatsApp'] });
+
+    await store.saveCourier({
+      id: inactiveCourier.id,
+      name: inactiveCourier.name,
+      phone: inactiveCourier.phone,
+      aliases: inactiveCourier.aliases,
+      isActive: false,
+      notes: inactiveCourier.notes,
+    });
+
+    expect(store.getAliasMap()).toEqual({
+      'Ana WhatsApp': activeCourier.name,
+    });
+  });
+
   it('rejects equivalent Romanian phone formats assigned to different couriers', async () => {
     const store = await createStore();
     await store.saveCourier({ name: 'Ana', phone: '0745 123 456', aliases: [] });

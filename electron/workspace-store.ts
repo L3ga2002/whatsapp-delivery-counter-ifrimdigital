@@ -499,7 +499,9 @@ export class WorkspaceStore {
 
   getAliasMap(): AliasMap {
     const aliases: AliasMap = {};
-    for (const courier of this.listCouriers()) {
+    // Inactive courier records are historical only. Their identities must not
+    // continue grouping fresh report rows under an old display name.
+    for (const courier of this.listCouriers().filter((item) => item.isActive)) {
       for (const alias of courier.aliases) {
         aliases[alias] = courier.name;
       }

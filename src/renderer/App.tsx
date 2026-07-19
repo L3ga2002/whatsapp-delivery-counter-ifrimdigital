@@ -214,7 +214,7 @@ export default function App(): JSX.Element {
         'Salvarea curierului nu a raspuns la timp. Verifica lista inainte sa incerci din nou.',
       );
       await reloadWorkspace();
-      if (selectedReport && report) {
+      if (selectedReport) {
         const rescanned = await withTimeout(
           desktopApi.scanSavedReport(selectedReport.id, scanOptions),
           workspaceReloadTimeoutMs,
@@ -225,7 +225,7 @@ export default function App(): JSX.Element {
         setReport(null);
       }
       setActiveReviewRow(null);
-      setNotice({ kind: 'success', text: selectedReport && report ? 'Curier salvat. Raportul deschis a fost actualizat cu noul alias.' : 'Curier salvat. La urmatoarea scanare, raportul va folosi noul alias.' });
+      setNotice({ kind: 'success', text: selectedReport ? 'Curier salvat. Raportul deschis a fost actualizat cu noul alias.' : 'Curier salvat. La urmatoarea scanare, raportul va folosi noul alias.' });
       return true;
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut salva curierul.') });
@@ -555,7 +555,7 @@ export default function App(): JSX.Element {
       await reloadWorkspace();
       setNotice({
         kind: 'success',
-        text: `Scan complet: ${nextReport.totalPickedUp} comenzi zi, ${nextReport.totalNightPickedUp} comenzi noapte.`,
+        text: `Scan complet: ${nextReport.totalPickedUp} comenzi zi, ${nextReport.totalNightPickedUp} comenzi noapte, ${nextReport.summaries.length} curieri detectati.`,
       });
     } catch (error) {
       setNotice({ kind: 'error', text: getErrorMessage(error, 'Scanarea raportului a esuat.') });
@@ -760,7 +760,7 @@ function DashboardView({
     <div className="view-stack">
       <section className="metrics-row">
         <Metric label="Restaurante active" value={workspace.restaurants.filter((restaurant) => restaurant.isActive).length} />
-        <Metric label="Curieri" value={workspace.couriers.length} />
+        <Metric label="Curieri salvati" value={workspace.couriers.length} />
         <Metric label="Rapoarte" value={workspace.reports.length} />
         <Metric label="Parser" value={workspace.parserVersion.version} />
       </section>
@@ -2253,7 +2253,7 @@ function ReportResults({
           <CheckCircle2 aria-hidden="true" />
           <div>
             <h2>Raport final livratori</h2>
-            <p>Total global pe toate restaurantele incluse in scanare.</p>
+            <p>Total global pe toate restaurantele incluse in scanare. {report.summaries.length} curieri detectati in conversatiile scanate.</p>
           </div>
         </div>
         {report.summaries.length ? <SummaryTable report={report} onOpenSource={(source) => openMetricSource(source, setActiveReviewRow, setActiveTab)} /> : <EmptyState text="Nu exista totaluri globale." />}
