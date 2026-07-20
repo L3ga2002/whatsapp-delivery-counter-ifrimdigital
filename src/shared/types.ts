@@ -13,13 +13,18 @@ export type ReportStatus = 'draft' | 'scanned' | 'verified' | 'exported';
 export type ReportImportRole = 'restaurant' | 'workHours' | 'mixed';
 
 export type ExportScope = 'full' | 'global' | 'restaurants' | 'review' | 'workHours';
+export type RestaurantTariffPolicy = 'day_only' | 'night_after_23';
 
-export const PARSER_VERSION = '0.4.0';
+export const PARSER_VERSION = '0.4.1';
 
 export interface RestaurantSchedule {
   openingTime: string;
   closingTime: string;
+  /** Explicit payment classification. Operating hours and night pricing are independent. */
+  tariffPolicy?: RestaurantTariffPolicy;
+  /** @deprecated Derived from 24-hour opening/closing times for legacy local records. */
   closesNextDay: boolean;
+  /** @deprecated Kept only for legacy local records. Use tariffPolicy for new scans. */
   usesRestaurantOrderTimeForNightTariff: boolean;
 }
 
@@ -42,6 +47,10 @@ export interface ParsedDeliveryMessage {
   status: DeliveryStatus;
   period: 'day' | 'night';
   reportDayKey: string;
+  /** True when the message was normalized against the saved restaurant schedule. */
+  usesRestaurantSchedule?: boolean;
+  /** Narrative or ambiguous messages remain visible in Review but cannot change totals. */
+  autoCountable?: boolean;
   tariffSourceLineId?: string;
   tariffSourceLineNumber?: number;
   tariffSourceTimestampIso?: string;

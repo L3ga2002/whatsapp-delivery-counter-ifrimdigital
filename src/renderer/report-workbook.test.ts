@@ -12,6 +12,7 @@ function restaurant(id: string, name: string, closesNextDay = false): Restaurant
     schedule: {
       openingTime: '10:00',
       closingTime: closesNextDay ? '03:00' : '23:00',
+      tariffPolicy: closesNextDay ? 'night_after_23' : 'day_only',
       closesNextDay,
       usesRestaurantOrderTimeForNightTariff: closesNextDay,
     },
@@ -85,6 +86,26 @@ describe('restaurant workbook export', () => {
     expect(sheet?.columnCount).toBe(10);
     expect(headerRow?.height).toBeGreaterThanOrEqual(54);
     expect(headerRow?.getCell(2).alignment?.wrapText).toBe(true);
+  });
+
+  it('keeps a 10:00-00:00 day-only restaurant on the compact day export layout', () => {
+    const midnightDayRestaurant = restaurant('restaurant-alfa', 'Restaurant Alfa', true);
+    midnightDayRestaurant.schedule = {
+      ...midnightDayRestaurant.schedule,
+      closingTime: '00:00',
+      tariffPolicy: 'day_only',
+    };
+    const workbook = buildReportWorkbook(
+      createTwoRestaurantReport(),
+      ExcelJS,
+      { scope: 'full', restaurantIds: [] },
+      [midnightDayRestaurant, restaurant('restaurant-beta', 'Restaurant Beta')],
+    );
+
+    const sheet = workbook.getWorksheet('Restaurant Alfa');
+    const headerRow = sheet?.findRow(7);
+    expect(headerRow?.values).not.toEqual(expect.arrayContaining(['Total\ncomenzi\nnoapte']));
+    expect(sheet?.columnCount).toBe(10);
   });
 
   it('adds a separate readable night block for a restaurant that closes after midnight', () => {

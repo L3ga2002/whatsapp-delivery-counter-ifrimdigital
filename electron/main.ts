@@ -5,7 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { autoUpdater } from 'electron-updater';
-import { applyRestaurantScheduleTariff, buildScanReport, filterMessagesForRestaurantSchedule, parseImportedTexts } from '../src/shared/parser';
+import {
+  applyRestaurantScheduleContext,
+  buildScanReport,
+  filterMessagesForRestaurantSchedule,
+  parseImportedTexts,
+  parseWhatsAppExport,
+} from '../src/shared/parser';
 import { WorkspaceStore } from './workspace-store';
 import type {
   AliasMap,
@@ -555,9 +561,38 @@ function materializeReportInputs(
         ? reportImport.importResult.files
         : [{ messages: reportImport.importResult.messages, conversationLines: [] }];
       for (const file of files) {
-        const scheduledMessages = applyRestaurantScheduleTariff(
-          filterMessagesForRestaurantSchedule(file.messages, restaurant?.schedule),
-          file.conversationLines,
+        // Existing local imports may have been parsed by an older rule set. Rebuild
+        // from the retained WhatsApp lines so a rescan always uses the current parser.
+        const hasRetainedConversation = 'sourceFile' in file && file.conversationLines.length > 0;
+        const reparsedFile = hasRetainedConversation
+          ? parseWhatsAppExport(
+            file.conversationLines.map((line) => line.rawLine).join('\n'),
+            file.sourceFile,
+            file.bytes,
+            file.restaurantName,
+          )
+          : file;
+        // A legacy import without retained source lines cannot be safely recalculated
+        // using the current parser. Keep it visible in Review, but do not let its old
+        // paid classifications affect a new scan. Re-importing the WhatsApp export is
+        // the explicit, lossless recovery path.
+        const sourceMessages = hasRetainedConversation
+          ? reparsedFile.messages
+          : reparsedFile.messages.map((message) => ({
+            ...message,
+            autoCountable: false,
+            needsReview: true,
+            reviewReasons: Array.from(new Set([
+              ...message.reviewReasons,
+              'Import vechi fara liniile conversatiei: reimporta fisierul pentru recalculare sigura.',
+            ])),
+          }));
+        const scheduledMessages = filterMessagesForRestaurantSchedule(
+          applyRestaurantScheduleContext(
+            sourceMessages,
+            reparsedFile.conversationLines,
+            restaurant?.schedule,
+          ),
           restaurant?.schedule,
         );
         messages.push(

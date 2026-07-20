@@ -1,11 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { RendererErrorBoundary } from './RendererErrorBoundary';
 import 'react-day-picker/style.css';
 import './styles.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <RendererErrorBoundary>
+      <App />
+    </RendererErrorBoundary>
   </React.StrictMode>,
 );

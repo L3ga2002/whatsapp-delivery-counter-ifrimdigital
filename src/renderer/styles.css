@@ -309,6 +309,19 @@ button {
   accent-color: var(--accent-orange);
 }
 
+.schedule-rule-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-orange) 42%, white);
+  border-radius: 6px;
+  background: var(--accent-orange-soft);
+  color: var(--brand-dark);
+  font-size: 0.9rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
 .schedule-time-picker {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -326,6 +339,17 @@ button {
 .schedule-time-picker > span {
   color: var(--brand-dark);
   font-weight: 800;
+}
+
+.renderer-recovery {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  min-height: 100vh;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px;
+  gap: 16px;
 }
 
 .date-range-picker {
@@ -1743,6 +1767,13 @@ select:focus {
   font-size: 0.98rem;
 }
 
+.review-context-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .review-context p {
   margin-top: 3px;
   color: #657382;
@@ -1755,6 +1786,76 @@ select:focus {
   max-height: min(66vh, 920px);
   overflow: auto;
   padding-right: 4px;
+}
+
+.context-load-button {
+  width: 100%;
+  min-height: 38px;
+  border: 1px dashed #df9154;
+  border-radius: 6px;
+  background: #fff8ef;
+  color: #8b4115;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.context-load-button:hover,
+.context-load-button:focus-visible {
+  outline: none;
+  border-style: solid;
+  background: #fff0df;
+}
+
+.context-target-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid #eadfd3;
+  border-radius: 8px;
+  background: #fffaf4;
+}
+
+.context-target-list > strong {
+  color: #5e341e;
+  font-size: 0.84rem;
+}
+
+.context-target-list > div {
+  display: grid;
+  max-height: 230px;
+  gap: 6px;
+  overflow: auto;
+}
+
+.context-target-list button:not(.context-load-button) {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #eadfd3;
+  border-radius: 6px;
+  color: #27313d;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.context-target-list button:not(.context-load-button):hover,
+.context-target-list button:not(.context-load-button):focus-visible,
+.context-target-list button.active {
+  border-color: #e77d2f;
+  outline: none;
+  background: #fff0df;
+}
+
+.context-target-list button span,
+.context-target-list button small {
+  color: #6c6258;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-metric-button {

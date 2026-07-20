@@ -25,6 +25,7 @@ const EXPORT_LINE_REGEX =
   /^(?<date>\d{2}\.\d{2}\.\d{4}), (?<time>\d{2}:\d{2}) - (?:(?<sender>[^:]+): )?(?<message>.*)$/;
 const STATUS_REGEX = /\b(ridicat|livrat|preluat|ridica|riscat|luat|livra[țt]i)(?=\b|x\s*\d)/i;
 const ALL_STATUS_REGEX = /\b(ridicat|livrat|preluat|ridica|riscat|luat|livra[țt]i)(?=\b|x\s*\d)/gi;
+const DIRECT_STATUS_REGEX = /^\s*(?:[>*•-]\s*)?(?:am\s+)?(ridicat|livrat|preluat|ridica|riscat|luat|livra[țt]i)(?=\s|:|x\s*\d|\d|$)/i;
 const QUANTITY_REGEX = /(?:x\s*(\d+)\b|\b(\d+)\s*x\b)/i;
 const EDITED_MESSAGE_REGEX = /<\s*Acest mesaj a fost editat\s*>/i;
 const ZONE_REGEX = /\bzona\s*([1-9])\b/gi;
@@ -41,6 +42,7 @@ const WORD_REGEX = /\b[\p{L}]{4,10}\b/giu;
 const MAX_AUTOMATIC_WORK_SESSION_MINUTES = 18 * 60;
 const MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES = 180;
 const MAX_RESTAURANT_ORDER_TO_PICKUP_MINUTES = 120;
+const MAX_AUTOMATIC_ACTION_CHARACTERS = 220;
 const RESTAURANT_ORDER_ADDRESS_REGEX = /\b(?:str(?:ada)?|bl(?:oc)?|sc(?:ara)?|apt(?:\.|\b)|interfon|telefon|tel(?:\.|\b)|adresa|adresă|comanda)\b/i;
 const RESTAURANT_ORDER_PHONE_REGEX = /(?:\+?40|0)7\d{8}\b/;
 type PaidUnitClassification =
@@ -81,6 +83,8 @@ interface StatusDetection {
   rawStatus: string;
   wasCorrected: boolean;
   source: 'status' | 'return' | 'completion';
+  autoCountable: boolean;
+  reviewReason?: string;
 }
 
 interface PaidClassification {
@@ -210,16 +214,18 @@ export function parseWhatsAppExport(
 }
 
 /**
- * For restaurants that explicitly run past midnight, a reliable restaurant order notice
- * posted before 23:00 keeps a single later pickup on the day tariff. We intentionally
- * leave multi-order pickups unchanged when the chat cannot prove a one-to-one match.
+ * For every restaurant with a night tariff, a reliable restaurant order notice
+ * posted before 23:00 keeps a single later pickup on the day tariff. The restaurant
+ * schedule only decides whether messages can be scanned; it never changes a tariff by
+ * itself. We intentionally leave multi-order pickups unchanged when the chat cannot
+ * prove a one-to-one match.
  */
 export function applyRestaurantScheduleTariff(
   messages: ParsedDeliveryMessage[],
   conversationLines: ConversationLine[],
   schedule?: RestaurantSchedule,
 ): ParsedDeliveryMessage[] {
-  if (!schedule?.closesNextDay || !schedule.usesRestaurantOrderTimeForNightTariff) {
+  if (!schedule) {
     return messages;
   }
 
@@ -236,27 +242,40 @@ export function applyRestaurantScheduleTariff(
   const usedNoticeIds = new Set<string>();
   const adjusted = new Map<string, ParsedDeliveryMessage>();
   for (const message of [...messages].sort((left, right) => left.timestampMs - right.timestampMs)) {
-    if (message.status !== 'ridicat' || message.paidQuantity !== 1 || message.period !== 'night') {
+    if (
+      message.status !== 'ridicat' ||
+      message.autoCountable === false ||
+      message.paidQuantity !== 1 ||
+      // A command posted by the restaurant before the configured closing time can
+      // be picked up a few minutes later. This applies to day-only restaurants too;
+      // the notice must still be a unique, verifiable match.
+      !requiresRestaurantNoticeForDayTariff(message, schedule)
+    ) {
       continue;
     }
 
-    const cutoffMs = nightTariffCutoffBefore(message.timestampMs);
-    const candidate = [...notices]
-      .reverse()
-      .find((notice) =>
+    const cutoffMs = restaurantScheduleCutoffBefore(message.timestampMs, schedule);
+    const candidates = notices.filter(
+      (notice) =>
         !usedNoticeIds.has(notice.id) &&
         notice.timestampMs < cutoffMs &&
-        cutoffMs - notice.timestampMs <= MAX_RESTAURANT_ORDER_TO_PICKUP_MINUTES * 60_000,
-      );
-    if (!candidate) {
+        notice.timestampMs < message.timestampMs &&
+        message.timestampMs - notice.timestampMs <= MAX_RESTAURANT_ORDER_TO_PICKUP_MINUTES * 60_000,
+    );
+    if (candidates.length !== 1) {
+      if (candidates.length > 1) {
+        adjusted.set(message.id, appendScheduleReview(message, 'Exista mai multe comenzi ale restaurantului inainte de inchidere; tariful zi nu a fost atribuit automat.'));
+      }
       continue;
     }
+    const candidate = candidates[0];
 
     usedNoticeIds.add(candidate.id);
     adjusted.set(message.id, {
       ...message,
       period: 'day',
-      reportDayKey: reportDayKey(candidate.timestampMs),
+      reportDayKey: restaurantOperatingDayKey(candidate.timestampMs, schedule),
+      usesRestaurantSchedule: true,
       tariffSourceLineId: candidate.id,
       tariffSourceLineNumber: candidate.lineNumber,
       tariffSourceTimestampIso: candidate.timestampIso,
@@ -264,6 +283,37 @@ export function applyRestaurantScheduleTariff(
   }
 
   return messages.map((message) => adjusted.get(message.id) ?? message);
+}
+
+/**
+ * Applies a restaurant's operating day to every retained delivery message. An overnight
+ * operating day closes on the configured hour, not at a hard-coded 04:00 boundary.
+ */
+export function applyRestaurantScheduleContext(
+  messages: ParsedDeliveryMessage[],
+  conversationLines: ConversationLine[],
+  schedule?: RestaurantSchedule,
+): ParsedDeliveryMessage[] {
+  const tariffAdjusted = applyRestaurantScheduleTariff(messages, conversationLines, schedule);
+  if (!schedule) {
+    return tariffAdjusted;
+  }
+
+  const nightTariff = usesNightTariff(schedule);
+  const contextual = tariffAdjusted.map((message) => ({
+    ...message,
+    // Operating hours and tariff are independent. A 10:00-00:00 restaurant is open
+    // past 23:00 but stays on the day tariff when configured as day-only.
+    period: !nightTariff && isWithinRestaurantSchedule(message.timestampMs, schedule)
+      ? 'day'
+      : message.period,
+    reportDayKey: message.tariffSourceTimestampIso
+      ? restaurantOperatingDayKey(Date.parse(message.tariffSourceTimestampIso), schedule)
+      : restaurantOperatingDayKey(message.timestampMs, schedule),
+    usesRestaurantSchedule: true,
+  }));
+
+  return alignDeliveryWithPickupOperatingDay(contextual);
 }
 
 /**
@@ -279,30 +329,70 @@ export function filterMessagesForRestaurantSchedule(
     return messages;
   }
 
-  const inSchedulePickups = messages.filter(
-    (message) => message.status === 'ridicat' && isWithinRestaurantSchedule(message.timestampMs, schedule),
-  );
-  const validPickupByCourier = new Map<string, number[]>();
-  for (const pickup of inSchedulePickups) {
-    const courierId = normalizeCourierIdentity(pickup.senderRaw);
-    const current = validPickupByCourier.get(courierId) ?? [];
-    current.push(pickup.timestampMs);
-    validPickupByCourier.set(courierId, current);
-  }
+  const queuedPickupsByCourier = new Map<string, number[]>();
+  const accepted = new Map<string, ParsedDeliveryMessage>();
+  const pickupAllowed = (message: ParsedDeliveryMessage): boolean =>
+    isWithinRestaurantSchedule(message.timestampMs, schedule) ||
+    Boolean(message.tariffSourceLineId);
 
-  return messages.filter((message) => {
+  for (const message of [...messages].sort((left, right) => left.timestampMs - right.timestampMs)) {
+    const courierId = normalizeCourierIdentity(message.senderRaw);
     if (message.status === 'ridicat') {
-      return isWithinRestaurantSchedule(message.timestampMs, schedule);
+      if (!pickupAllowed(message)) {
+        continue;
+      }
+      accepted.set(message.id, message);
+      if (message.autoCountable !== false) {
+        const queue = queuedPickupsByCourier.get(courierId) ?? [];
+        for (let index = 0; index < Math.max(0, message.quantity); index += 1) {
+          queue.push(message.timestampMs);
+        }
+        queuedPickupsByCourier.set(courierId, queue);
+      }
+      continue;
     }
     if (message.status !== 'livrat') {
-      return isWithinRestaurantSchedule(message.timestampMs, schedule);
+      if (isWithinRestaurantSchedule(message.timestampMs, schedule)) {
+        accepted.set(message.id, message);
+      }
+      continue;
     }
-    const pickups = validPickupByCourier.get(normalizeCourierIdentity(message.senderRaw)) ?? [];
-    return pickups.some(
-      (pickupMs) =>
-        message.timestampMs >= pickupMs &&
-        message.timestampMs - pickupMs <= MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES * 60_000,
-    );
+
+    const queue = queuedPickupsByCourier.get(courierId) ?? [];
+    while (
+      queue.length &&
+      (queue[0] > message.timestampMs ||
+        message.timestampMs - queue[0] > MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES * 60_000)
+    ) {
+      queue.shift();
+    }
+    const requestedQuantity = Math.max(0, message.quantity);
+    const matchedQuantity = Math.min(requestedQuantity, queue.length);
+    if (matchedQuantity > 0) {
+      queue.splice(0, matchedQuantity);
+      queuedPickupsByCourier.set(courierId, queue);
+    }
+
+    if (
+      isWithinRestaurantSchedule(message.timestampMs, schedule) ||
+      matchedQuantity === requestedQuantity ||
+      matchedQuantity > 0
+    ) {
+      accepted.set(
+        message.id,
+        matchedQuantity > 0 && matchedQuantity < requestedQuantity
+          ? appendScheduleReview(
+            { ...message, quantity: matchedQuantity },
+            'Doar o parte din livrare se potriveste cu ridicari valide in program; verifica manual.',
+          )
+          : message,
+      );
+    }
+  }
+
+  return messages.flatMap((message) => {
+    const acceptedMessage = accepted.get(message.id);
+    return acceptedMessage ? [acceptedMessage] : [];
   });
 }
 
@@ -314,10 +404,100 @@ function isWithinRestaurantSchedule(timestampMs: number, schedule: RestaurantSch
   }
   const date = new Date(timestampMs);
   const currentMinutes = date.getHours() * 60 + date.getMinutes();
-  if (schedule.closesNextDay || closingMinutes < openingMinutes) {
-    return currentMinutes >= openingMinutes || currentMinutes <= closingMinutes;
+  if (isOvernightRestaurantSchedule(schedule)) {
+    return currentMinutes >= openingMinutes || currentMinutes < closingMinutes;
   }
-  return currentMinutes >= openingMinutes && currentMinutes <= closingMinutes;
+  return currentMinutes >= openingMinutes && currentMinutes < closingMinutes;
+}
+
+function isOvernightRestaurantSchedule(schedule: RestaurantSchedule): boolean {
+  const openingMinutes = parseScheduleMinutes(schedule.openingTime);
+  const closingMinutes = parseScheduleMinutes(schedule.closingTime);
+  // `closesNextDay` used to be persisted as a separate flag. Derive the fact from
+  // the actual 24-hour values so an old/stale flag cannot turn 10:00-23:00 into an
+  // overnight schedule.
+  return openingMinutes !== null && closingMinutes !== null && closingMinutes < openingMinutes;
+}
+
+function usesNightTariff(schedule: RestaurantSchedule): boolean {
+  if (schedule.tariffPolicy === 'day_only' || schedule.tariffPolicy === 'night_after_23') {
+    return schedule.tariffPolicy === 'night_after_23';
+  }
+
+  // Compatibility with local records saved before tariffPolicy existed. Midnight is
+  // a late day closing; an end time after midnight defaults to the night tariff.
+  const openingMinutes = parseScheduleMinutes(schedule.openingTime);
+  const closingMinutes = parseScheduleMinutes(schedule.closingTime);
+  return openingMinutes !== null && closingMinutes !== null && closingMinutes > 0 && closingMinutes < openingMinutes;
+}
+
+function restaurantOperatingDayKey(timestampMs: number, schedule: RestaurantSchedule): string {
+  const closingMinutes = parseScheduleMinutes(schedule.closingTime);
+  if (!isOvernightRestaurantSchedule(schedule) || closingMinutes === null) {
+    return localDateKey(timestampMs);
+  }
+
+  const date = new Date(timestampMs);
+  const currentMinutes = date.getHours() * 60 + date.getMinutes();
+  if (currentMinutes <= closingMinutes) {
+    date.setDate(date.getDate() - 1);
+  }
+  return localDateKey(date.getTime());
+}
+
+function appendScheduleReview(message: ParsedDeliveryMessage, reason: string): ParsedDeliveryMessage {
+  return {
+    ...message,
+    confidence: 'low',
+    needsReview: true,
+    reviewReasons: Array.from(new Set([...message.reviewReasons, reason])),
+  };
+}
+
+function alignDeliveryWithPickupOperatingDay(messages: ParsedDeliveryMessage[]): ParsedDeliveryMessage[] {
+  const queues = new Map<string, Array<Pick<ParsedDeliveryMessage, 'timestampMs' | 'period' | 'reportDayKey'>>>();
+  const adjusted = new Map<string, ParsedDeliveryMessage>();
+
+  for (const message of [...messages].sort((left, right) => left.timestampMs - right.timestampMs)) {
+    const key = deliveryQueueKey(message.restaurantName, normalizeCourierIdentity(message.senderRaw));
+    const queue = queues.get(key) ?? [];
+    if (message.autoCountable !== false && message.status === 'ridicat') {
+      const quantity = Math.max(0, positiveNumber(message.paidQuantity, 0));
+      for (let index = 0; index < quantity; index += 1) {
+        queue.push({ timestampMs: message.timestampMs, period: message.period, reportDayKey: message.reportDayKey });
+      }
+      queues.set(key, queue);
+      continue;
+    }
+    if (message.autoCountable === false || message.status !== 'livrat') {
+      continue;
+    }
+
+    const matches: Array<Pick<ParsedDeliveryMessage, 'period' | 'reportDayKey'>> = [];
+    for (let index = 0; index < message.quantity; index += 1) {
+      while (queue.length && message.timestampMs - queue[0].timestampMs > MAX_AUTOMATIC_DELIVERY_DURATION_MINUTES * 60_000) {
+        queue.shift();
+      }
+      const pickup = queue[0];
+      if (!pickup || pickup.timestampMs > message.timestampMs) {
+        break;
+      }
+      queue.shift();
+      matches.push(pickup);
+    }
+    queues.set(key, queue);
+    if (!matches.length) {
+      continue;
+    }
+    const contexts = new Set(matches.map((match) => `${match.period}:${match.reportDayKey}`));
+    if (contexts.size === 1) {
+      adjusted.set(message.id, { ...message, period: matches[0].period, reportDayKey: matches[0].reportDayKey });
+    } else {
+      adjusted.set(message.id, appendScheduleReview(message, 'Livrarea corespunde unor ridicari din zile/tarife diferite; verifica manual.'));
+    }
+  }
+
+  return messages.map((message) => adjusted.get(message.id) ?? message);
 }
 
 function parseScheduleMinutes(value: string): number | null {
@@ -350,7 +530,7 @@ export function buildScanReport(
   const availabilitySourceMessages = scanOptions.scanWorkHours ? availabilityMessages : [];
   const inInterval = deliverySourceMessages
     .map(normalizeParsedDeliveryMessage)
-    .filter((message) => message.timestampMs >= fromMs && message.timestampMs <= toMs);
+    .filter((message) => isMessageInsideScanInterval(message, fromMs, toMs));
   const availabilityInInterval = availabilitySourceMessages.filter(
     (message) => message.timestampMs >= fromMs && message.timestampMs <= toMs,
   );
@@ -470,7 +650,7 @@ export function buildScanReport(
       summary.senderAliases.push(message.senderRaw);
     }
 
-    if (message.status === 'ridicat') {
+    if (message.autoCountable !== false && message.status === 'ridicat') {
       const paidUnits = buildPaidUnits(message);
       if (scanOptions.scanOrders) {
         for (const [index, unit] of paidUnits.entries()) {
@@ -496,7 +676,7 @@ export function buildScanReport(
         })));
         pickupQueues.set(queueKey, queue);
       }
-    } else {
+    } else if (message.autoCountable !== false) {
       if (scanOptions.scanOrders || scanOptions.scanDeliveryTimes) {
         const queueKey = deliveryQueueKey(message.restaurantName, courierId);
         const queue = pickupQueues.get(queueKey) ?? [];
@@ -1291,6 +1471,10 @@ function parseRelevantEntry(
   }
 
   const reviewReasons: string[] = [];
+  const autoCountable = statusDetection.autoCountable !== false;
+  if (!autoCountable && statusDetection.reviewReason) {
+    reviewReasons.push(statusDetection.reviewReason);
+  }
   const quantityMatch = QUANTITY_REGEX.exec(entry.message);
   const implicitQuantity = quantityMatch
     ? null
@@ -1374,13 +1558,15 @@ function parseRelevantEntry(
   reviewReasons.push(...zoneResult.reviewReasons);
   const outsideKilometers = detectOutsideKilometers(entry.message);
   const outsideAmountLei = detectOutsideAmountLei(entry.message);
-  const paidClassification = classifyPaidDelivery(
-    entry.message,
-    status,
-    quantity,
-    hasDirectReturn,
-    hasCompletion,
-  );
+  const paidClassification = autoCountable
+    ? classifyPaidDelivery(
+      entry.message,
+      status,
+      quantity,
+      hasDirectReturn,
+      hasCompletion,
+    )
+    : createEmptyPaidClassification();
   reviewReasons.push(...paidClassification.reviewReasons);
   if (status === 'livrat' && outsideAmountLei > 0) {
     reviewReasons.push('Mesajul livrat mentioneaza suma in lei; este tratat ca verificare, nu dubleaza plata.');
@@ -1400,6 +1586,7 @@ function parseRelevantEntry(
       status,
       period,
       reportDayKey: reportDayKey(timestampMs),
+      autoCountable,
       quantity,
       zoneCounts: zoneResult.zoneCounts,
       outsideKilometers,
@@ -1535,9 +1722,26 @@ function isLikelyRestaurantOrderNotice(
   return hasOrderDetail && message.length >= 24;
 }
 
-function nightTariffCutoffBefore(timestampMs: number): number {
+function requiresRestaurantNoticeForDayTariff(
+  message: ParsedDeliveryMessage,
+  schedule: RestaurantSchedule,
+): boolean {
+  return (usesNightTariff(schedule) && message.period === 'night') || !isWithinRestaurantSchedule(message.timestampMs, schedule);
+}
+
+function restaurantScheduleCutoffBefore(timestampMs: number, schedule: RestaurantSchedule): number {
+  const closingMinutes = parseScheduleMinutes(schedule.closingTime);
+  if (closingMinutes === null) {
+    return timestampMs;
+  }
+
+  // Night pricing switches at 23:00 only when the restaurant explicitly uses a
+  // night tariff. Day-only restaurants use their saved closing time instead.
+  const cutoffMinutes = usesNightTariff(schedule) ? 23 * 60 : closingMinutes;
   const cutoff = new Date(timestampMs);
-  cutoff.setHours(23, 0, 0, 0);
+  cutoff.setHours(Math.floor(cutoffMinutes / 60), cutoffMinutes % 60, 0, 0);
+  // For a pickup after midnight, this calendar day's 23:00 is still ahead; the
+  // relevant tariff cutoff is yesterday at 23:00.
   if (timestampMs < cutoff.getTime()) {
     cutoff.setDate(cutoff.getDate() - 1);
   }
@@ -1587,63 +1791,78 @@ function isValidDatePart(year: number, month: number, day: number): boolean {
 }
 
 function detectStatus(message: string): StatusDetection | null {
-  const exactMatch = STATUS_REGEX.exec(message);
-  if (exactMatch) {
-    const mapped = mapStatusWord(exactMatch[1]);
+  const directMatch = DIRECT_STATUS_REGEX.exec(message);
+  if (directMatch && isConciseOperationalAction(message)) {
+    const mapped = mapStatusWord(directMatch[1]);
     return {
       status: mapped.status,
-      rawStatus: exactMatch[1],
+      rawStatus: directMatch[1],
       wasCorrected: mapped.wasCorrected,
       source: 'status',
+      autoCountable: true,
     };
   }
 
-  if (isDirectReturnAction(message)) {
+  if (isDirectReturnAction(message) && isConciseOperationalAction(message)) {
     return {
       status: 'ridicat',
       rawStatus: 'retur',
       wasCorrected: false,
       source: 'return',
+      autoCountable: true,
     };
   }
 
-  if (isDirectCompletionAction(message)) {
+  if (isDirectCompletionAction(message) && isConciseOperationalAction(message)) {
     return {
       status: 'ridicat',
       rawStatus: 'completare',
       wasCorrected: false,
       source: 'completion',
+      autoCountable: true,
     };
   }
 
-  const hasDeliveryContext =
-    QUANTITY_REGEX.test(message) ||
-    ZONE_REGEX.test(message) ||
-    MONEY_REGEX.test(message) ||
-    COMPLETION_REGEX.test(message);
-  QUANTITY_REGEX.lastIndex = 0;
-  ZONE_REGEX.lastIndex = 0;
-  MONEY_REGEX.lastIndex = 0;
-  if (!hasDeliveryContext) {
-    return null;
-  }
-
-  for (const match of message.matchAll(WORD_REGEX)) {
-    const rawWord = match[0];
-    const word = normalizeWord(rawWord);
+  const leadingWord = leadingOperationalWord(message);
+  if (leadingWord && isConciseOperationalAction(message)) {
+    const word = normalizeWord(leadingWord);
     const ridicatDistance = levenshteinDistance(word, 'ridicat');
     const livratDistance = levenshteinDistance(word, 'livrat');
 
     if (isPlausibleStatusTypo(word, 'ridicat', ridicatDistance)) {
-      return { status: 'ridicat', rawStatus: rawWord, wasCorrected: true, source: 'status' };
+      return { status: 'ridicat', rawStatus: leadingWord, wasCorrected: true, source: 'status', autoCountable: true };
     }
 
     if (isPlausibleStatusTypo(word, 'livrat', livratDistance)) {
-      return { status: 'livrat', rawStatus: rawWord, wasCorrected: true, source: 'status' };
+      return { status: 'livrat', rawStatus: leadingWord, wasCorrected: true, source: 'status', autoCountable: true };
     }
   }
 
+  const narrativeMatch = STATUS_REGEX.exec(message);
+  if (narrativeMatch) {
+    const mapped = mapStatusWord(narrativeMatch[1]);
+    return {
+      status: mapped.status,
+      rawStatus: narrativeMatch[1],
+      wasCorrected: false,
+      source: 'status',
+      autoCountable: false,
+      reviewReason: 'Statusul apare intr-un mesaj narativ sau prea lung; nu este numarat automat.',
+    };
+  }
+
   return null;
+}
+
+function isConciseOperationalAction(message: string): boolean {
+  const normalized = message.trim();
+  return normalized.length > 0 && normalized.length <= MAX_AUTOMATIC_ACTION_CHARACTERS && normalized.split('\n').length <= 2 && !normalized.includes('?');
+}
+
+function leadingOperationalWord(message: string): string | null {
+  const normalized = normalizeWord(message).trim();
+  const match = /^(?:[>*•-]\s*)?(?:am\s+)?([\p{L}]{4,10})(?=\s|:|x\s*\d|\d|$)/u.exec(normalized);
+  return match?.[1] ?? null;
 }
 
 function mapStatusWord(rawWord: string): {
@@ -2032,6 +2251,7 @@ function normalizeParsedDeliveryMessage(message: ParsedDeliveryMessage): ParsedD
       paidOutsideKilometers: positiveNumber(message.paidOutsideKilometers, 0),
       paidOutsideAmountLei: positiveNumber(message.paidOutsideAmountLei, 0),
       paidSource: normalizePaidSource(message.paidSource),
+      autoCountable: message.autoCountable !== false,
       reviewReasons: Array.isArray(message.reviewReasons) ? message.reviewReasons : [],
     };
   }
@@ -2068,6 +2288,7 @@ function normalizeParsedDeliveryMessage(message: ParsedDeliveryMessage): ParsedD
     paidOutsideKilometers: paidClassification.paidOutsideKilometers,
     paidOutsideAmountLei: paidClassification.paidOutsideAmountLei,
     paidSource: paidClassification.paidSource,
+    autoCountable: message.autoCountable !== false,
     needsReview: true,
     reviewReasons,
   };
@@ -2179,6 +2400,18 @@ function classifyPaidDelivery(
     paidOutsideAmountLei: 0,
     paidSource: source,
     reviewReasons,
+  };
+}
+
+function createEmptyPaidClassification(): PaidClassification {
+  return {
+    paidQuantity: 0,
+    paidZoneCounts: createEmptyZoneCounts(),
+    paidOutsideZoneDeliveries: 0,
+    paidOutsideKilometers: 0,
+    paidOutsideAmountLei: 0,
+    paidSource: 'none',
+    reviewReasons: [],
   };
 }
 
@@ -2600,18 +2833,16 @@ function isDirectCompletionAction(message: string): boolean {
 }
 
 function isDirectReturnAction(message: string): boolean {
-  const normalized = normalizeWord(message);
+  const normalized = normalizeWord(message).trim();
   if (!RETURN_REGEX.test(normalized)) {
     return false;
   }
   if (normalized.includes('?')) {
     return false;
   }
-  if (CANCELED_REGEX.test(normalized)) {
-    return true;
-  }
-
-  return /^(?:\s*(?:x\s*\d+|\d+\s*x)?\s*)retur\b/.test(normalized);
+  const allowedSuffix = '(?:\\s+(?:x\\s*\\d+|\\d+\\s*x|zona\\s*[1-3]|\\d+(?:[.,]\\d+)?\\s*lei))*\\s*[.!]?$';
+  return new RegExp(`^(?:(?:x\\s*\\d+|\\d+\\s*x)\\s*)?retur\\b${allowedSuffix}`).test(normalized) ||
+    new RegExp(`^anulat[ăa]?\\s*\\(\\s*retur\\s*\\)${allowedSuffix}`).test(normalized);
 }
 
 function hasOutsideZoneMention(message: string): boolean {
@@ -2716,6 +2947,24 @@ function localDateKey(timestampMs: number): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function isMessageInsideScanInterval(message: ParsedDeliveryMessage, fromMs: number, toMs: number): boolean {
+  if (!message.usesRestaurantSchedule || !isWholeLocalDayRange(fromMs, toMs)) {
+    return message.timestampMs >= fromMs && message.timestampMs <= toMs;
+  }
+
+  const fromDay = localDateKey(fromMs);
+  const toDay = localDateKey(toMs);
+  return message.reportDayKey >= fromDay && message.reportDayKey <= toDay;
+}
+
+function isWholeLocalDayRange(fromMs: number, toMs: number): boolean {
+  const from = new Date(fromMs);
+  const to = new Date(toMs);
+  const startsAtDayStart = from.getHours() === 0 && from.getMinutes() === 0 && from.getSeconds() === 0;
+  const endsAtDayEnd = to.getHours() === 23 && to.getMinutes() >= 59;
+  return startsAtDayStart && endsAtDayEnd;
 }
 
 function isNightTimestamp(timestampMs: number): boolean {

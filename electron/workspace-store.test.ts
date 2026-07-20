@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceStore } from './workspace-store';
+import { filterMessagesForRestaurantSchedule } from '../src/shared/parser';
+import type { ParsedDeliveryMessage } from '../src/shared/types';
 
 const tempDirectories: string[] = [];
 
@@ -47,6 +49,79 @@ describe('WorkspaceStore legacy courier aliases', () => {
     expect(migration.imported).toBe(0);
     expect(migration.conflicts).toHaveLength(1);
     expect(store.listCouriers().map((courier) => courier.name)).toEqual(['Robert Actual']);
+  });
+});
+
+describe('WorkspaceStore restaurant schedules', () => {
+  it('normalizes legacy AM/PM values into an unambiguous 24-hour schedule', async () => {
+    const store = await createStore();
+
+    const dayRestaurant = await store.saveRestaurant({
+      name: 'Hanzo Sushi',
+      schedule: { openingTime: '10:00 AM', closingTime: '12:00 PM' },
+    });
+    const overnightRestaurant = await store.saveRestaurant({
+      name: 'Pizzeria Romana',
+      schedule: { openingTime: '10:00 AM', closingTime: '03:00 AM' },
+    });
+    const midnightDayRestaurant = await store.saveRestaurant({
+      name: 'Restaurant pana la miezul noptii',
+      schedule: { openingTime: '10:00 AM', closingTime: '12:00 AM' },
+    });
+
+    expect(dayRestaurant.schedule).toMatchObject({
+      openingTime: '10:00',
+      closingTime: '12:00',
+      closesNextDay: false,
+    });
+    expect(overnightRestaurant.schedule).toMatchObject({
+      openingTime: '10:00',
+      closingTime: '03:00',
+      closesNextDay: true,
+      tariffPolicy: 'night_after_23',
+    });
+    expect(midnightDayRestaurant.schedule).toMatchObject({
+      openingTime: '10:00',
+      closingTime: '00:00',
+      closesNextDay: true,
+      tariffPolicy: 'day_only',
+    });
+  });
+
+  it('keeps an explicitly selected day tariff when an operating program crosses midnight', async () => {
+    const store = await createStore();
+    const restaurant = await store.saveRestaurant({
+      name: 'Restaurant cu intarzieri',
+      schedule: { openingTime: '10:00', closingTime: '01:00', tariffPolicy: 'day_only' },
+    });
+
+    expect(restaurant.schedule).toMatchObject({
+      openingTime: '10:00',
+      closingTime: '01:00',
+      closesNextDay: true,
+      tariffPolicy: 'day_only',
+    });
+  });
+
+  it('uses a normalized legacy schedule when filtering real pickup timestamps', async () => {
+    const store = await createStore();
+    const restaurant = await store.saveRestaurant({
+      name: 'Hanzo Sushi',
+      schedule: { openingTime: '10:00 AM', closingTime: '12:00 PM' },
+    });
+    const pickupAt = (hour: number, minute: number): ParsedDeliveryMessage => ({
+      id: `${hour}:${minute}`,
+      timestampMs: new Date(2026, 6, 20, hour, minute).getTime(),
+      senderRaw: 'Curier test',
+      status: 'ridicat',
+    } as ParsedDeliveryMessage);
+
+    const filtered = filterMessagesForRestaurantSchedule(
+      [pickupAt(9, 59), pickupAt(10, 0), pickupAt(12, 0), pickupAt(12, 1)],
+      restaurant.schedule,
+    );
+
+    expect(filtered.map((message) => message.id)).toEqual(['10:0']);
   });
 });
 

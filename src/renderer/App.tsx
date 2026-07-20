@@ -33,6 +33,7 @@ import type {
   ReportImportRole,
   Restaurant,
   RestaurantInput,
+  RestaurantTariffPolicy,
   PayrollCalculationMode,
   PayrollPaymentMethod,
   MetricSourceKey,
@@ -255,38 +256,40 @@ export default function App(): JSX.Element {
     const scanOptionsToUse = scanOptions;
     setIsBusy(true);
     try {
-      await desktopApi.deleteCourier(courierId);
-      await reloadWorkspace();
-    } catch (error) {
-      setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge curierul.') });
-      return;
-    }
-
-    try {
-      if (reportIdToRescan) {
-        const rescanned = await withTimeout(
-          desktopApi.scanSavedReport(reportIdToRescan, scanOptionsToUse),
-          workspaceReloadTimeoutMs,
-          'Raportul nu a putut fi actualizat automat dupa stergerea curierului.',
-        );
-        setReport(rescanned);
-      } else {
-        setReport(null);
+      try {
+        await desktopApi.deleteCourier(courierId);
+        await reloadWorkspace();
+      } catch (error) {
+        setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut sterge curierul.') });
+        return;
       }
-      setActiveReviewRow(null);
-      setNotice({
-        kind: 'success',
-        text: reportIdToRescan
-          ? 'Curier sters. Raportul deschis a fost recalculat fara aliasurile lui.'
-          : 'Curier sters. La urmatoarea scanare, raportul nu va mai folosi aliasurile lui.',
-      });
-    } catch (error) {
-      setReport(null);
-      setActiveReviewRow(null);
-      setNotice({
-        kind: 'info',
-        text: `${getErrorMessage(error, 'Raportul nu a putut fi actualizat automat.')} Curierul a fost sters; raportul ramane draft si trebuie scanat manual.`,
-      });
+
+      try {
+        if (reportIdToRescan) {
+          const rescanned = await withTimeout(
+            desktopApi.scanSavedReport(reportIdToRescan, scanOptionsToUse),
+            workspaceReloadTimeoutMs,
+            'Raportul nu a putut fi actualizat automat dupa stergerea curierului.',
+          );
+          setReport(rescanned);
+        } else {
+          setReport(null);
+        }
+        setActiveReviewRow(null);
+        setNotice({
+          kind: 'success',
+          text: reportIdToRescan
+            ? 'Curier sters. Raportul deschis a fost recalculat fara aliasurile lui.'
+            : 'Curier sters. La urmatoarea scanare, raportul nu va mai folosi aliasurile lui.',
+        });
+      } catch (error) {
+        setReport(null);
+        setActiveReviewRow(null);
+        setNotice({
+          kind: 'info',
+          text: `${getErrorMessage(error, 'Raportul nu a putut fi actualizat automat.')} Curierul a fost sters; raportul ramane draft si trebuie scanat manual.`,
+        });
+      }
     } finally {
       setIsBusy(false);
     }
@@ -843,11 +846,20 @@ function RestaurantsView({
   onDelete: (restaurantId: string) => Promise<void>;
   isBusy: boolean;
 }): JSX.Element {
-  const emptyDraft = {
+  const emptyDraft: {
+    id: string;
+    name: string;
+    openingTime: string;
+    closingTime: string;
+    tariffPolicy: RestaurantTariffPolicy;
+    closesNextDay: boolean;
+    usesRestaurantOrderTimeForNightTariff: boolean;
+  } = {
     id: '',
     name: '',
     openingTime: '10:00',
     closingTime: '23:00',
+    tariffPolicy: 'day_only' as const,
     closesNextDay: false,
     usesRestaurantOrderTimeForNightTariff: false,
   };
@@ -855,6 +867,9 @@ function RestaurantsView({
   const [initialDraft, setInitialDraft] = useState(emptyDraft);
   const isEditing = Boolean(draft.id);
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
+  const closesNextDayAutomatically = isScheduleOvernight(draft.openingTime, draft.closingTime);
+  const closesAtMidnight = draft.closingTime === '00:00';
+  const usesNightTariff = draft.tariffPolicy === 'night_after_23';
 
   const resetDraft = (): void => {
     setDraft(emptyDraft);
@@ -870,6 +885,8 @@ function RestaurantsView({
       name: restaurant.name,
       openingTime: restaurant.schedule.openingTime,
       closingTime: restaurant.schedule.closingTime,
+      tariffPolicy: restaurant.schedule.tariffPolicy
+        ?? (restaurant.schedule.closesNextDay && restaurant.schedule.closingTime !== '00:00' ? 'night_after_23' : 'day_only'),
       closesNextDay: restaurant.schedule.closesNextDay,
       usesRestaurantOrderTimeForNightTariff: restaurant.schedule.usesRestaurantOrderTimeForNightTariff,
     };
@@ -892,8 +909,20 @@ function RestaurantsView({
           <label>Nume restaurant<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
           <label>Deschide la<ScheduleTimePicker value={draft.openingTime} onChange={(value) => setDraft((current) => ({ ...current, openingTime: value }))} /></label>
           <label>Inchide la<ScheduleTimePicker value={draft.closingTime} onChange={(value) => setDraft((current) => ({ ...current, closingTime: value }))} /></label>
-          <label className="checkbox-field"><input type="checkbox" checked={draft.closesNextDay} onChange={(event) => setDraft((current) => ({ ...current, closesNextDay: event.target.checked }))} /><span>Programul trece dupa miezul noptii</span></label>
-          {draft.closesNextDay ? <label className="checkbox-field"><input type="checkbox" checked={draft.usesRestaurantOrderTimeForNightTariff} onChange={(event) => setDraft((current) => ({ ...current, usesRestaurantOrderTimeForNightTariff: event.target.checked }))} /><span>Comenzile intrate in restaurant inainte de 23:00 raman tarif zi</span></label> : null}
+          <label>Clasificare tarif
+            <select value={draft.tariffPolicy} onChange={(event) => setDraft((current) => ({
+              ...current,
+              tariffPolicy: event.target.value === 'night_after_23' ? 'night_after_23' : 'day_only',
+            }))}>
+              <option value="day_only">Doar tarif zi, pana la inchidere</option>
+              <option value="night_after_23">Tarif noapte dupa 23:00</option>
+            </select>
+          </label>
+          {closesNextDayAutomatically ? <p className="schedule-rule-note">{closesAtMidnight
+            ? 'Programul se incheie la miezul noptii. Ramane tarif zi pana la inchidere.'
+            : usesNightTariff
+              ? 'Programul trece dupa miezul noptii. Tariful noapte este activ dupa 23:00; o comanda sigur asociata cu un mesaj al restaurantului anterior ramane tarif zi.'
+              : 'Programul trece dupa miezul noptii, dar ramane tarif zi pana la ora de inchidere.'}</p> : null}
         </div>
         <div className="form-actions">
           <button className="primary-button" type="button" disabled={isBusy} onClick={async () => {
@@ -905,8 +934,9 @@ function RestaurantsView({
               schedule: {
                 openingTime: draft.openingTime,
                 closingTime: draft.closingTime,
-                closesNextDay: draft.closesNextDay,
-                usesRestaurantOrderTimeForNightTariff: draft.usesRestaurantOrderTimeForNightTariff,
+                tariffPolicy: draft.tariffPolicy,
+                closesNextDay: closesNextDayAutomatically,
+                usesRestaurantOrderTimeForNightTariff: usesNightTariff,
               },
             });
             if (saved) resetDraft();
@@ -920,8 +950,10 @@ function RestaurantsView({
         rows={restaurants.map((restaurant) => ({
           id: restaurant.id,
           primary: restaurant.name,
-          secondary: `${restaurant.schedule.openingTime} - ${restaurant.schedule.closingTime}${restaurant.schedule.closesNextDay ? ' (dupa miezul noptii)' : ''}`,
-          meta: restaurant.schedule.usesRestaurantOrderTimeForNightTariff ? 'tarif noapte dupa ora comenzii' : restaurant.isActive ? 'activ' : 'inactiv',
+          secondary: `${restaurant.schedule.openingTime} - ${restaurant.schedule.closingTime}${restaurant.schedule.closingTime === '00:00' ? ' (pana la miezul noptii)' : restaurant.schedule.closesNextDay ? ' (dupa miezul noptii)' : ''}`,
+          meta: restaurant.schedule.tariffPolicy === 'night_after_23'
+            ? 'tarif noapte dupa 23:00'
+            : restaurant.isActive ? 'tarif zi pana la inchidere' : 'inactiv',
           inactive: !restaurant.isActive,
         }))}
         onEdit={editRestaurant}
@@ -1125,6 +1157,19 @@ function ScheduleTimePicker({
       </select>
     </span>
   );
+}
+
+function isScheduleOvernight(openingTime: string, closingTime: string): boolean {
+  const toMinutes = (value: string): number | null => {
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 ? hour * 60 + minute : null;
+  };
+  const openingMinutes = toMinutes(openingTime);
+  const closingMinutes = toMinutes(closingTime);
+  return openingMinutes !== null && closingMinutes !== null && closingMinutes < openingMinutes;
 }
 
 function DateRangePicker({
@@ -2391,7 +2436,7 @@ function ReportResults({
         {report.reviewRows.length ? (
           <>
             <ReviewList rows={report.reviewRows} activeRowId={activeReviewRow?.id ?? null} onSelect={setActiveReviewRow} />
-            {activeReviewRow ? <ReviewContext row={activeReviewRow} imports={imports} /> : null}
+            {activeReviewRow ? <ReviewContext row={activeReviewRow} imports={imports} onClose={() => setActiveReviewRow(null)} /> : null}
           </>
         ) : (
           <EmptyState text="Nu exista randuri de review." />
@@ -2483,6 +2528,7 @@ function MetricSourceButton({
   const [isOpen, setIsOpen] = useState(false);
   const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
   const controlRef = useRef<HTMLSpanElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const sources = groupMetricSources(findMetricSources(report.metricSources, metric, filter));
@@ -2494,9 +2540,17 @@ function MetricSourceButton({
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
     closeTimerRef.current = null;
   };
+  const closePopover = (restoreFocus = false): void => {
+    clearCloseTimer();
+    clearTimer();
+    setIsOpen(false);
+    if (restoreFocus) {
+      window.setTimeout(() => buttonRef.current?.focus(), 0);
+    }
+  };
   const scheduleClose = (): void => {
     clearCloseTimer();
-    closeTimerRef.current = window.setTimeout(() => setIsOpen(false), 260);
+    closeTimerRef.current = window.setTimeout(() => closePopover(), 260);
   };
   const openPopover = (): void => {
     clearCloseTimer();
@@ -2515,15 +2569,40 @@ function MetricSourceButton({
     timerRef.current = window.setTimeout(openPopover, 900);
   };
   useEffect(() => () => { clearTimer(); clearCloseTimer(); }, []);
+  useEffect(() => {
+    if (!isOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (event.target instanceof Node && !controlRef.current?.contains(event.target)) {
+        closePopover();
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePopover(true);
+      }
+    };
+    const closeOnViewportChange = (): void => closePopover();
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('resize', closeOnViewportChange);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('resize', closeOnViewportChange);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+    };
+  }, [isOpen]);
   if (value === 0 || sources.length === 0) return <span>{formatter?.() ?? value}</span>;
   return (
     <span ref={controlRef} className="metric-source-control" onMouseEnter={scheduleOpen} onMouseLeave={() => { clearTimer(); scheduleClose(); }}>
-      <button className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); clearCloseTimer(); isOpen ? setIsOpen(false) : openPopover(); }}>
+      <button ref={buttonRef} className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); clearCloseTimer(); isOpen ? closePopover() : openPopover(); }}>
         {formatter?.() ?? value}
       </button>
       {isOpen ? <div className="metric-source-popover" role="dialog" aria-label={`Comenzi pentru ${label}`} style={popoverPosition ?? undefined} onMouseEnter={clearCloseTimer} onMouseLeave={scheduleClose}>
         <strong>{label}</strong><span>{sources.reduce((total, source) => total + source.quantity, 0)} comenzi</span>
-        <div>{sources.map((source) => <button type="button" key={source.id} onClick={() => { clearCloseTimer(); setIsOpen(false); onOpenSource(source.record); }}>
+        <div>{sources.map((source) => <button type="button" key={source.id} onClick={() => { closePopover(); onOpenSource(source.record); }}>
           <strong>{formatDateTime(source.record.pickupTimestampIso)}</strong><span>{source.record.restaurantName} · ridicat x{source.quantity}{source.record.deliveryTimestampIso ? ` · livrat ${formatDateTime(source.record.deliveryTimestampIso).split(', ')[1] ?? ''}` : ''}</span>
         </button>)}</div>
       </div> : null}
@@ -2779,43 +2858,136 @@ function ReviewList({
   );
 }
 
-function ReviewContext({ row, imports }: { row: ReviewRow; imports: ReportImport[] }): JSX.Element {
+function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: ReportImport[]; onClose: () => void }): JSX.Element {
+  const maxContextLinesPerSide = 120;
+  const maxVisibleTargets = 160;
   const contextRef = useRef<HTMLDivElement>(null);
+  const [linesBefore, setLinesBefore] = useState(80);
+  const [linesAfter, setLinesAfter] = useState(80);
+  const [visibleTargets, setVisibleTargets] = useState(80);
+  const [selectedTargetId, setSelectedTargetId] = useState<string>('');
+  const files = useMemo(() => imports.flatMap((item) => item.importResult.files ?? []), [imports]);
+  const lineIndexBySource = useMemo(() => {
+    const index = new Map<string, number>();
+    for (const file of files) {
+      for (let lineIndex = 0; lineIndex < file.conversationLines.length; lineIndex += 1) {
+        index.set(`${file.sourceId}:${file.conversationLines[lineIndex].lineNumber}`, lineIndex);
+      }
+    }
+    return index;
+  }, [files]);
+  const sourceMessages = useMemo(
+    () => imports.flatMap((item) => item.importResult.messages),
+    [imports],
+  );
+  const targets = useMemo(() => {
+    if (row.kind === 'mismatch' || row.kind === 'metric-source') {
+      const ids = new Set(row.sourceMessageIds);
+      return sourceMessages
+        .filter((message) => ids.has(message.id))
+        .sort((left, right) => left.timestampMs - right.timestampMs)
+        .map((message) => ({
+          id: message.id,
+          sourceId: message.sourceId,
+          lineNumber: message.lineNumber,
+          timestampIso: message.timestampIso,
+          restaurantName: message.restaurantName,
+          senderRaw: message.senderRaw,
+          originalMessage: message.originalMessage,
+        }));
+    }
+
+    return [{
+      id: row.id,
+      sourceId: row.sourceId,
+      lineNumber: row.lineNumber,
+      timestampIso: row.timestampIso,
+      restaurantName: row.restaurantName,
+      senderRaw: row.courierName,
+      originalMessage: row.originalMessage,
+    }];
+  }, [row, sourceMessages]);
+  useEffect(() => {
+    setLinesBefore(80);
+    setLinesAfter(80);
+    setVisibleTargets(80);
+    setSelectedTargetId('');
+  }, [row.id]);
+  const activeTarget = targets.find((target) => target.id === selectedTargetId) ?? targets[0] ?? null;
   useEffect(() => {
     const target = contextRef.current?.querySelector<HTMLElement>('.context-line.target');
-    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [row.id]);
-  const files = imports.flatMap((item) => item.importResult.files ?? []);
-  const targetLinesBySource = new Map<string, Set<number>>();
-  const addTarget = (sourceId: string, lineNumber: number): void => {
-    const current = targetLinesBySource.get(sourceId) ?? new Set<number>();
-    current.add(lineNumber);
-    targetLinesBySource.set(sourceId, current);
-  };
+    target?.scrollIntoView({ block: 'center' });
+  }, [activeTarget?.id, row.id]);
 
-  if (row.kind === 'mismatch' || row.kind === 'metric-source') {
-    const messages = imports
-      .flatMap((item) => item.importResult.messages)
-      .filter((message) => row.sourceMessageIds.includes(message.id));
-    messages.forEach((message) => addTarget(message.sourceId, message.lineNumber));
-  } else {
-    addTarget(row.sourceId, row.lineNumber);
-  }
+  const contextFiles = useMemo(() => {
+    if (!activeTarget) return [];
+    const file = files.find((candidate) => candidate.sourceId === activeTarget.sourceId);
+    if (!file) return [];
 
-  const contextFiles = files.filter((file) => targetLinesBySource.has(file.sourceId));
+    const lines = file.conversationLines ?? [];
+    const targetIndex = Math.max(
+      0,
+      lineIndexBySource.get(`${file.sourceId}:${activeTarget.lineNumber}`) ?? 0,
+    );
+    const startIndex = Math.max(0, targetIndex - linesBefore);
+    const endIndex = Math.min(lines.length, targetIndex + linesAfter + 1);
+    return [{
+      ...file,
+      visibleLines: lines.slice(startIndex, endIndex),
+      hiddenBefore: startIndex,
+      hiddenAfter: lines.length - endIndex,
+    }];
+  }, [activeTarget, files, lineIndexBySource, linesAfter, linesBefore]);
 
   return (
     <div className="review-context">
-      <h3>{row.kind === 'mismatch' ? 'Conversatia completa pentru neconcordanta' : row.kind === 'metric-source' ? 'Conversatia completa pentru comanda selectata' : 'Conversatia completa'}</h3>
+      <div className="review-context-heading">
+        <h3>{row.kind === 'mismatch' ? 'Context pentru neconcordanta' : row.kind === 'metric-source' ? 'Context pentru comanda selectata' : 'Context conversatie'}</h3>
+        <button className="secondary-button compact" type="button" onClick={onClose}>Inchide contextul</button>
+      </div>
+      <p>Se afiseaza doar zona relevanta din conversatie pentru ca aplicatia sa ramana rapida. Mesajul ales este evidentiat.</p>
+      {targets.length > 1 ? (
+        <div className="context-target-list" aria-label="Mesaje implicate in review">
+          <strong>Mesaje implicate: {targets.length}</strong>
+          <div>
+            {targets.slice(0, visibleTargets).map((target) => (
+              <button
+                className={target.id === activeTarget?.id ? 'active' : ''}
+                key={target.id}
+                type="button"
+                onClick={() => {
+                  setSelectedTargetId(target.id);
+                  setLinesBefore(80);
+                  setLinesAfter(80);
+                }}
+              >
+                <strong>{formatDateTime(target.timestampIso)}</strong>
+                <span>{target.restaurantName} · {target.senderRaw}</span>
+                <small>{target.originalMessage}</small>
+              </button>
+            ))}
+          </div>
+          {visibleTargets < Math.min(targets.length, maxVisibleTargets) ? (
+            <button className="context-load-button" type="button" onClick={() => setVisibleTargets((current) => Math.min(maxVisibleTargets, current + 80))}>
+              Arata inca {Math.min(80, targets.length - visibleTargets)} mesaje implicate
+            </button>
+          ) : null}
+          {targets.length > maxVisibleTargets ? <small>Lista este limitata la {maxVisibleTargets} mesaje pentru a pastra aplicatia rapida. Alege filtrul sau deschide un rand punctual pentru context.</small> : null}
+        </div>
+      ) : null}
       {contextFiles.length ? (
         <div className="context-lines" ref={contextRef}>
-          {contextFiles.flatMap((file) => file.conversationLines.map((line) => (
-            <article className={`context-line ${targetLinesBySource.get(file.sourceId)?.has(line.lineNumber) ? 'target' : ''}`} key={line.id}>
-              <strong>{file.restaurantName} · linia {line.lineNumber}</strong>
-              <span>{line.timestampIso ? formatDateTime(line.timestampIso) : 'data necunoscuta'} · {line.senderRaw || 'sistem'}</span>
-              <code>{line.rawLine}</code>
-            </article>
-          )))}
+          {contextFiles.flatMap((file) => [
+            file.hiddenBefore > 0 && linesBefore < maxContextLinesPerSide ? <button className="context-load-button" type="button" key={`${file.sourceId}-before`} onClick={() => setLinesBefore((current) => Math.min(maxContextLinesPerSide, current + 100))}>Arata inca {Math.min(maxContextLinesPerSide - linesBefore, file.hiddenBefore)} mesaje anterioare</button> : null,
+            ...file.visibleLines.map((line) => (
+              <article className={`context-line ${line.lineNumber === activeTarget?.lineNumber ? 'target' : ''}`} key={line.id}>
+                <strong>{file.restaurantName} · linia {line.lineNumber}</strong>
+                <span>{line.timestampIso ? formatDateTime(line.timestampIso) : 'data necunoscuta'} · {line.senderRaw || 'sistem'}</span>
+                <code>{line.rawLine}</code>
+              </article>
+            )),
+            file.hiddenAfter > 0 && linesAfter < maxContextLinesPerSide ? <button className="context-load-button" type="button" key={`${file.sourceId}-after`} onClick={() => setLinesAfter((current) => Math.min(maxContextLinesPerSide, current + 100))}>Arata inca {Math.min(maxContextLinesPerSide - linesAfter, file.hiddenAfter)} mesaje urmatoare</button> : null,
+          ])}
         </div>
       ) : (
         row.kind === 'mismatch' || row.kind === 'metric-source' ? (
@@ -3466,7 +3638,7 @@ function addRestaurantProfessionalSheets(
     // Forma foii urmeaza programul configurat. O livrare pastrata pentru imperechere
     // dupa inchiderea unui restaurant de zi nu trebuie sa introduca rubrici de noapte.
     const includeNightColumns = restaurant
-      ? restaurant.schedule.closesNextDay
+      ? restaurant.schedule.tariffPolicy === 'night_after_23'
       : includesNightData;
     addProfessionalDailySheet(
       workbook,
@@ -4146,8 +4318,9 @@ function validateScanImports(options: ScanOptions, imports: ReportImport[]): str
   return null;
 }
 
-function getReportImportRange(imports: ReportImport[]): ImportRange | null {
-  const timestamps: number[] = [];
+export function getReportImportRange(imports: ReportImport[]): ImportRange | null {
+  let fromMs = Number.POSITIVE_INFINITY;
+  let toMs = Number.NEGATIVE_INFINITY;
   let deliveryCount = 0;
   let availabilityCount = 0;
 
@@ -4156,23 +4329,25 @@ function getReportImportRange(imports: ReportImport[]): ImportRange | null {
     availabilityCount += item.importResult.availabilityMessages.length;
     for (const message of item.importResult.messages) {
       if (Number.isFinite(message.timestampMs)) {
-        timestamps.push(message.timestampMs);
+        fromMs = Math.min(fromMs, message.timestampMs);
+        toMs = Math.max(toMs, message.timestampMs);
       }
     }
     for (const message of item.importResult.availabilityMessages) {
       if (Number.isFinite(message.timestampMs)) {
-        timestamps.push(message.timestampMs);
+        fromMs = Math.min(fromMs, message.timestampMs);
+        toMs = Math.max(toMs, message.timestampMs);
       }
     }
   }
 
-  if (!timestamps.length) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
     return null;
   }
 
   return {
-    fromIso: new Date(Math.min(...timestamps)).toISOString(),
-    toIso: new Date(Math.max(...timestamps)).toISOString(),
+    fromIso: new Date(fromMs).toISOString(),
+    toIso: new Date(toMs).toISOString(),
     deliveryCount,
     availabilityCount,
   };

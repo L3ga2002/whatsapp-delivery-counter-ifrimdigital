@@ -43,6 +43,7 @@ const defaultSettings: AppSettings = {
 const defaultRestaurantSchedule = {
   openingTime: '10:00',
   closingTime: '23:00',
+  tariffPolicy: 'day_only' as const,
   closesNextDay: false,
   usesRestaurantOrderTimeForNightTariff: false,
 };
@@ -929,20 +930,74 @@ function sanitizeRestaurantSchedule(
   fallback?: Restaurant['schedule'],
 ): Restaurant['schedule'] {
   const base = fallback ?? defaultRestaurantSchedule;
+  const openingTime = sanitizeScheduleTime(input?.openingTime, base.openingTime);
+  const closingTime = sanitizeScheduleTime(input?.closingTime, base.closingTime);
+  const openingMinutes = scheduleTimeToMinutes(openingTime);
+  const closingMinutes = scheduleTimeToMinutes(closingTime);
+  // Historical records stored this separately; the 24-hour times are the source of
+  // truth. This prevents a stale flag from turning 10:00-23:00 into overnight.
+  const closesNextDay = Boolean(
+    openingMinutes !== null && closingMinutes !== null && closingMinutes < openingMinutes,
+  );
+  const tariffPolicy = sanitizeTariffPolicy(
+    input?.tariffPolicy ?? fallback?.tariffPolicy,
+    openingMinutes,
+    closingMinutes,
+  );
   return {
-    openingTime: sanitizeScheduleTime(input?.openingTime, base.openingTime),
-    closingTime: sanitizeScheduleTime(input?.closingTime, base.closingTime),
-    closesNextDay: input?.closesNextDay ?? base.closesNextDay,
-    usesRestaurantOrderTimeForNightTariff:
-      input?.usesRestaurantOrderTimeForNightTariff ?? base.usesRestaurantOrderTimeForNightTariff,
+    openingTime,
+    closingTime,
+    tariffPolicy,
+    // A closing hour before opening is unambiguously an overnight schedule.
+    closesNextDay,
+    // Kept only for backwards-compatible local records, not as a manual opt-in.
+    usesRestaurantOrderTimeForNightTariff: tariffPolicy === 'night_after_23',
   };
 }
 
-function sanitizeScheduleTime(value: string | undefined, fallback: string): string {
-  if (!value || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
-    return fallback;
+function sanitizeTariffPolicy(
+  value: unknown,
+  openingMinutes: number | null,
+  closingMinutes: number | null,
+): Restaurant['schedule']['tariffPolicy'] {
+  if (value === 'day_only' || value === 'night_after_23') {
+    return value;
   }
-  return value;
+
+  // Legacy records have no explicit policy. Midnight is a valid late day closing,
+  // while an end time after midnight is treated as a night schedule by default.
+  return openingMinutes !== null && closingMinutes !== null && closingMinutes > 0 && closingMinutes < openingMinutes
+    ? 'night_after_23'
+    : 'day_only';
+}
+
+function sanitizeScheduleTime(value: string | undefined, fallback: string): string {
+  const clean = value?.trim();
+  if (!clean) return fallback;
+
+  const twentyFourHour = /^(?:[01]\d|2[0-3]):[0-5]\d$/.exec(clean);
+  if (twentyFourHour) {
+    return clean;
+  }
+
+  // Older Windows controls can persist an AM/PM display value. Convert it
+  // instead of silently falling back to a default restaurant schedule.
+  const twelveHour = /^(0?[1-9]|1[0-2])\s*:\s*([0-5]\d)\s*([AaPp])\.?\s*[Mm]\.?$/.exec(clean);
+  if (!twelveHour) return fallback;
+
+  const rawHour = Number(twelveHour[1]);
+  const minutes = twelveHour[2];
+  const isPm = twelveHour[3].toLowerCase() === 'p';
+  const hours = (rawHour % 12) + (isPm ? 12 : 0);
+  return `${String(hours).padStart(2, '0')}:${minutes}`;
+}
+
+function scheduleTimeToMinutes(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 ? hours * 60 + minutes : null;
 }
 
 function parseScanOptions(value: unknown): ScanOptions {
