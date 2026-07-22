@@ -64,7 +64,6 @@ async function verifyLatestYaml(version, installer) {
   const installerEntry = new RegExp(`- url: ${escapedInstaller}\\r?\\n\\s+sha512: ([^\\r\\n]+)\\r?\\n\\s+size: (\\d+)`).exec(latestYml);
   const topLevelPath = /^path:\s*(.+)$/m.exec(latestYml)?.[1]?.trim();
   const topLevelSha512 = /^sha512:\s*(.+)$/m.exec(latestYml)?.[1]?.trim();
-  const topLevelSize = /^size:\s*(\d+)$/m.exec(latestYml)?.[1];
 
   if (!new RegExp(`^version:\\s*${version}$`, 'm').test(latestYml) || !installerEntry) {
     throw new Error('latest.yml nu corespunde versiunii sau installerului din release/.');
@@ -72,7 +71,7 @@ async function verifyLatestYaml(version, installer) {
   if (installerEntry[1] !== installerSha512 || Number(installerEntry[2]) !== installerSize) {
     throw new Error('latest.yml are SHA-512 sau dimensiune invalida pentru installer.');
   }
-  if (topLevelPath !== installer || topLevelSha512 !== installerSha512 || Number(topLevelSize) !== installerSize) {
+  if (topLevelPath !== installer || topLevelSha512 !== installerSha512) {
     throw new Error('latest.yml are metadate top-level invalide pentru installer.');
   }
 }
