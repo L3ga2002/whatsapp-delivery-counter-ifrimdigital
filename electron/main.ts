@@ -38,6 +38,9 @@ let mainWindow: BrowserWindow | null = null;
 let importInProgress = false;
 let workspaceStore: WorkspaceStore | null = null;
 let updateStatus: AppUpdateStatus = createUpdateStatus('idle');
+let focusRecoveryInProgress = false;
+let needsFocusFix = false;
+let triggeringProgrammaticBlur = false;
 
 const aliasFileName = 'courier-aliases.json';
 const updateOwner = 'L3ga2002';
@@ -68,6 +71,30 @@ function createWindow(): void {
   });
   mainWindow.setMenuBarVisibility(false);
 
+  mainWindow.on('blur', () => {
+    if (process.platform === 'win32' && !triggeringProgrammaticBlur) {
+      needsFocusFix = true;
+    }
+  });
+  mainWindow.on('focus', () => {
+    if (process.platform !== 'win32' || !needsFocusFix || triggeringProgrammaticBlur) return;
+    needsFocusFix = false;
+    triggeringProgrammaticBlur = true;
+    setTimeout(() => {
+      const window = mainWindow;
+      if (!window || window.isDestroyed()) {
+        triggeringProgrammaticBlur = false;
+        return;
+      }
+      window.blur();
+      window.focus();
+      window.webContents.focus();
+      setTimeout(() => {
+        triggeringProgrammaticBlur = false;
+      }, 100);
+    }, 100);
+  });
+
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
     if (!isTrustedAppUrl(targetUrl)) {
@@ -81,6 +108,30 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
+}
+
+function restoreWindowInputFocus(window: BrowserWindow | null): void {
+  if (!window || window.isDestroyed()) return;
+
+  window.focus();
+  window.webContents.focus();
+
+  if (process.platform !== 'win32' || focusRecoveryInProgress) return;
+  focusRecoveryInProgress = true;
+
+  // Native Windows dialogs can occasionally leave the renderer without keyboard focus.
+  setTimeout(() => {
+    if (!window.isDestroyed()) {
+      window.blur();
+    }
+    setTimeout(() => {
+      if (!window.isDestroyed()) {
+        window.focus();
+        window.webContents.focus();
+      }
+      focusRecoveryInProgress = false;
+    }, 0);
+  }, 75);
 }
 
 app.whenReady().then(async () => {
@@ -137,15 +188,20 @@ function registerIpcHandlers(): void {
       throw new Error('Fereastra aplicatiei nu este disponibila.');
     }
 
-    const result = await dialog.showOpenDialog(window, {
-      title: 'Importa export WhatsApp',
-      properties: ['openFile', 'multiSelections'],
-      filters: [
-        { name: 'WhatsApp export', extensions: ['txt', 'zip'] },
-        { name: 'Text files', extensions: ['txt'] },
-        { name: 'Zip archives', extensions: ['zip'] },
-      ],
-    });
+    let result: Electron.OpenDialogReturnValue;
+    try {
+      result = await dialog.showOpenDialog(window, {
+        title: 'Importa export WhatsApp',
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'WhatsApp export', extensions: ['txt', 'zip'] },
+          { name: 'Text files', extensions: ['txt'] },
+          { name: 'Zip archives', extensions: ['zip'] },
+        ],
+      });
+    } finally {
+      restoreWindowInputFocus(window);
+    }
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;
@@ -169,7 +225,12 @@ function registerIpcHandlers(): void {
       defaultPath: `whatsapp-delivery-counter-backup-${new Date().toISOString().slice(0, 10)}.sqlite`,
       filters: [{ name: 'Workspace backup', extensions: ['sqlite'] }],
     };
-    const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    let result: Electron.SaveDialogReturnValue;
+    try {
+      result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    } finally {
+      restoreWindowInputFocus(window);
+    }
     if (result.canceled || !result.filePath) {
       return null;
     }
@@ -184,7 +245,12 @@ function registerIpcHandlers(): void {
       properties: ['openFile'],
       filters: [{ name: 'Workspace backup', extensions: ['sqlite'] }],
     };
-    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    let result: Electron.OpenDialogReturnValue;
+    try {
+      result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    } finally {
+      restoreWindowInputFocus(window);
+    }
     if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
@@ -262,15 +328,20 @@ function registerIpcHandlers(): void {
       throw new Error('Fereastra aplicatiei nu este disponibila.');
     }
 
-    const result = await dialog.showOpenDialog(window, {
-      title: 'Importa conversatie in raport',
-      properties: ['openFile', 'multiSelections'],
-      filters: [
-        { name: 'WhatsApp export', extensions: ['txt', 'zip'] },
-        { name: 'Text files', extensions: ['txt'] },
-        { name: 'Zip archives', extensions: ['zip'] },
-      ],
-    });
+    let result: Electron.OpenDialogReturnValue;
+    try {
+      result = await dialog.showOpenDialog(window, {
+        title: 'Importa conversatie in raport',
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'WhatsApp export', extensions: ['txt', 'zip'] },
+          { name: 'Text files', extensions: ['txt'] },
+          { name: 'Zip archives', extensions: ['zip'] },
+        ],
+      });
+    } finally {
+      restoreWindowInputFocus(window);
+    }
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;
@@ -598,6 +669,7 @@ function materializeReportInputs(
         messages.push(
           ...scheduledMessages.map((message) => ({
             ...message,
+            reportImportId: reportImport.id,
             restaurantId: reportImport.restaurantId ?? undefined,
             restaurantName: displayName,
           })),

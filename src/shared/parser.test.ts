@@ -1483,6 +1483,39 @@ describe('scan report builder', () => {
     );
   });
 
+  it('keeps the saved report import and exact WhatsApp lines on metric drill-down records', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 21:14 - Ana: ridicat x1',
+        '30.05.2026, 21:22 - Ana: livrat x1 zona 2',
+      ].join('\n'),
+      'Conversație WhatsApp cu Restaurant Test.txt',
+    );
+    const messages = parsed.messages.map((message) => ({
+      ...message,
+      reportImportId: 'import-restaurant-test',
+    }));
+
+    const report = buildScanReport(
+      messages,
+      {
+        fromIso: new Date(2026, 4, 30, 21, 0).toISOString(),
+        toIso: new Date(2026, 4, 30, 22, 0).toISOString(),
+      },
+      {},
+    );
+
+    expect(report.metricSources).toContainEqual(
+      expect.objectContaining({
+        reportImportId: 'import-restaurant-test',
+        pickupSourceFile: 'Conversație WhatsApp cu Restaurant Test.txt',
+        pickupLineNumber: 1,
+        deliverySourceFile: 'Conversație WhatsApp cu Restaurant Test.txt',
+        deliveryLineNumber: 2,
+      }),
+    );
+  });
+
   it('keeps exact source context on message review rows', () => {
     const parsed = parseWhatsAppExport(
       '30.05.2026, 21:14 - Ana: livrt x1 zona 2',
@@ -1882,6 +1915,120 @@ describe('scan report builder', () => {
 
     expect(report.totalPickedUp).toBe(1);
     expect(report.reviewRows).toHaveLength(1);
+  });
+
+  it('counts an explicit cancelled pickup only for the remaining paid routes', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '13.07.2026, 12:00 - Ana: Ridicat x2 (1 x anulata)',
+        '13.07.2026, 12:10 - Ana: Ridicat x2 (anulata)',
+        '13.07.2026, 12:20 - Ana: Ridicat x3 (1 x refuzata)',
+      ].join('\n'),
+      'anulare-explicita.txt',
+    );
+    const report = buildScanReport(
+      parsed.messages,
+      {
+        fromIso: new Date(2026, 6, 13, 0, 0).toISOString(),
+        toIso: new Date(2026, 6, 13, 23, 59).toISOString(),
+      },
+      {},
+    );
+
+    expect(parsed.messages[0]).toMatchObject({ paidQuantity: 1, paidZoneCounts: { zone1: 1, zone2: 0, zone3: 0 } });
+    expect(parsed.messages[1]).toMatchObject({ paidQuantity: 2, paidZoneCounts: { zone1: 2, zone2: 0, zone3: 0 } });
+    expect(parsed.messages[2]).toMatchObject({ paidQuantity: 2, paidZoneCounts: { zone1: 2, zone2: 0, zone3: 0 } });
+    expect(report.totalPickedUp).toBe(5);
+    expect(report.totalZoneCounts).toEqual({ zone1: 5, zone2: 0, zone3: 0 });
+  });
+
+  it('adds one paid Z1 return route only for an explicit delivery return to location', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '13.07.2026, 12:00 - Ana: Ridicat x2',
+        '13.07.2026, 12:20 - Ana: Livrat x2 (1x comanda refuzata, retur locatie)',
+        '13.07.2026, 12:30 - Ana: Am discutat despre o comanda refuzata si retur locatie.',
+      ].join('\n'),
+      'retur-locatie.txt',
+    );
+    const report = buildScanReport(
+      parsed.messages,
+      {
+        fromIso: new Date(2026, 6, 13, 0, 0).toISOString(),
+        toIso: new Date(2026, 6, 13, 23, 59).toISOString(),
+      },
+      {},
+    );
+
+    expect(parsed.messages[1]).toMatchObject({
+      status: 'livrat',
+      quantity: 2,
+      paidReturnLocationQuantity: 1,
+    });
+    expect(report.totalPickedUp).toBe(3);
+    expect(report.totalDelivered).toBe(3);
+    expect(report.totalZoneCounts).toEqual({ zone1: 3, zone2: 0, zone3: 0 });
+    expect(report.summaries[0]).toMatchObject({ pickedUp: 3, delivered: 3, difference: 0 });
+    expect(report.metricSources).toContainEqual(expect.objectContaining({
+      classification: 'zone1',
+      pickupMessage: expect.stringContaining('retur locatie'),
+      deliveryMessage: expect.stringContaining('retur locatie'),
+    }));
+    expect(report.reviewRows.some((row) => row.kind === 'mismatch')).toBe(false);
+  });
+
+  it('keeps a return-location metric source in the matched pickup tariff bucket', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '13.07.2026, 22:50 - Ana: Ridicat x1',
+        '13.07.2026, 23:10 - Ana: Ridicat x1',
+        '13.07.2026, 23:20 - Ana: Livrat x2 (1x comanda refuzata, retur locatie)',
+      ].join('\n'),
+      'retur-locatie-perioada.txt',
+    );
+    const report = buildScanReport(
+      parsed.messages,
+      {
+        fromIso: new Date(2026, 6, 13, 0, 0).toISOString(),
+        toIso: new Date(2026, 6, 13, 23, 59).toISOString(),
+      },
+      {},
+    );
+    const returnSource = report.metricSources.find((source) =>
+      source.pickupMessage.includes('retur locatie'),
+    );
+
+    expect(report.totalZoneCounts).toEqual({ zone1: 2, zone2: 0, zone3: 0 });
+    expect(report.totalNightZoneCounts).toEqual({ zone1: 1, zone2: 0, zone3: 0 });
+    expect(returnSource).toMatchObject({ period: 'day', dayKey: '2026-07-13' });
+  });
+
+  it('does not pair deliveries across separately saved report imports', () => {
+    const pickup = parseWhatsAppExport(
+      '13.07.2026, 12:00 - Ana: Ridicat x1',
+      'fragment-a.txt',
+    ).messages[0];
+    const delivery = parseWhatsAppExport(
+      '13.07.2026, 12:20 - Ana: Livrat x1 zona 2',
+      'fragment-b.txt',
+    ).messages[0];
+    const report = buildScanReport(
+      [
+        { ...pickup, reportImportId: 'import-a' },
+        { ...delivery, reportImportId: 'import-b' },
+      ],
+      {
+        fromIso: new Date(2026, 6, 13, 0, 0).toISOString(),
+        toIso: new Date(2026, 6, 13, 23, 59).toISOString(),
+      },
+      {},
+    );
+
+    expect(report.metricSources).toHaveLength(1);
+    expect(report.metricSources[0]).toMatchObject({ reportImportId: 'import-a' });
+    expect(report.metricSources[0]).not.toHaveProperty('deliveryMessageId');
+    expect(report.metricSources[0]).not.toHaveProperty('deliveryReportImportId');
+    expect(report.summaries[0].deliveryTimeSampleCount).toBe(0);
   });
 
   it('does not interpret "ridicat la ora doua" as a delivery quantity', () => {

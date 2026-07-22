@@ -36,6 +36,7 @@ const MONEY_REGEX = /\b(\d+(?:[.,]\d+)?)\s*(?:lei|ron)\b/gi;
 const COMPLETION_REGEX = /\bcompletare(?:\s+comanda)?\b/i;
 const RETURN_REGEX = /\bretur\b/i;
 const CANCELED_REGEX = /\banulat[ăa]?\b/i;
+const REFUSED_REGEX = /\brefuzat[ăa]?\b/i;
 const AVAILABILITY_REGEX = /\b(indisponibil|disponibil|indisp|disp|offline|online)\b/i;
 const AVAILABILITY_WORDS = ['indisponibil', 'disponibil', 'offline', 'online'] as const;
 const WORD_REGEX = /\b[\p{L}]{4,10}\b/giu;
@@ -459,7 +460,11 @@ function alignDeliveryWithPickupOperatingDay(messages: ParsedDeliveryMessage[]):
   const adjusted = new Map<string, ParsedDeliveryMessage>();
 
   for (const message of [...messages].sort((left, right) => left.timestampMs - right.timestampMs)) {
-    const key = deliveryQueueKey(message.restaurantName, normalizeCourierIdentity(message.senderRaw));
+    const key = deliveryQueueKey(
+      message.restaurantName,
+      normalizeCourierIdentity(message.senderRaw),
+      message.reportImportId,
+    );
     const queue = queues.get(key) ?? [];
     if (message.autoCountable !== false && message.status === 'ridicat') {
       const quantity = Math.max(0, positiveNumber(message.paidQuantity, 0));
@@ -665,7 +670,7 @@ export function buildScanReport(
         }
       }
       if (scanOptions.scanOrders || scanOptions.scanDeliveryTimes) {
-        const queueKey = deliveryQueueKey(message.restaurantName, courierId);
+        const queueKey = deliveryQueueKey(message.restaurantName, courierId, message.reportImportId);
         const queue = pickupQueues.get(queueKey) ?? [];
         queue.push(...paidUnits.map((unit, index) => ({
           timestampMs: message.timestampMs,
@@ -678,12 +683,18 @@ export function buildScanReport(
       }
     } else if (message.autoCountable !== false) {
       if (scanOptions.scanOrders || scanOptions.scanDeliveryTimes) {
-        const queueKey = deliveryQueueKey(message.restaurantName, courierId);
+        const queueKey = deliveryQueueKey(message.restaurantName, courierId, message.reportImportId);
         const queue = pickupQueues.get(queueKey) ?? [];
         const deliveryUnits = buildDeliveryClassificationUnits(message);
+        let returnLocationPeriod: 'day' | 'night' | null = null;
+        let returnLocationDayKey: string | null = null;
         for (let count = 0; count < message.quantity; count += 1) {
           const pickupMatch = takePickupForDelivery(queue, message.timestampMs, message.id, displayName, reviewRows);
           const deliveryPeriod = pickupMatch?.pickup.period ?? message.period;
+          if (returnLocationPeriod === null && pickupMatch) {
+            returnLocationPeriod = pickupMatch.pickup.period;
+            returnLocationDayKey = reportDayKey(pickupMatch.pickup.timestampMs);
+          }
           const deliveryUnit = deliveryUnits[count] ?? null;
           if (scanOptions.scanOrders) {
             if (deliveryPeriod === 'night') {
@@ -717,6 +728,28 @@ export function buildScanReport(
             addDeliveryDuration(summary, minutes);
             addDeliveryDuration(restaurantSummary, minutes);
             addDeliveryDuration(dailySummary, minutes);
+          }
+        }
+        if (scanOptions.scanOrders) {
+          const returnLocationUnits = buildPaidReturnLocationUnits(message);
+          for (const [index, unit] of returnLocationUnits.entries()) {
+            const period = returnLocationPeriod ?? message.period;
+            applyPaidReturnLocationUnitToSummaries(
+              summary,
+              restaurantSummary,
+              dailySummary,
+              period,
+              unit,
+            );
+            const metricSourceId = `metric-return-location-${message.id}-${index}`;
+            metricSources.set(metricSourceId, createReturnLocationMetricSourceRecord(
+              metricSourceId,
+              message,
+              displayName,
+              unit,
+              period,
+              returnLocationDayKey ?? message.reportDayKey,
+            ));
           }
         }
         pickupQueues.set(queueKey, queue);
@@ -1157,11 +1190,36 @@ function createMetricSourceRecord(
     restaurantName: pickup.restaurantName,
     courierName,
     dayKey: pickup.reportDayKey,
+    reportImportId: pickup.reportImportId,
     pickupMessageId: pickup.id,
     pickupSourceId: pickup.sourceId,
+    pickupSourceFile: pickup.sourceFile,
     pickupLineNumber: pickup.lineNumber,
     pickupTimestampIso: pickup.timestampIso,
     pickupMessage: pickup.originalMessage,
+  };
+}
+
+function createReturnLocationMetricSourceRecord(
+  id: string,
+  delivery: ParsedDeliveryMessage,
+  courierName: string,
+  unit: PaidUnitClassification,
+  period: 'day' | 'night',
+  dayKey: string,
+): MetricSourceRecord {
+  const source = createMetricSourceRecord(id, delivery, courierName, unit);
+  return {
+    ...source,
+    period,
+    dayKey,
+    deliveryMessageId: delivery.id,
+    deliveryReportImportId: delivery.reportImportId,
+    deliverySourceId: delivery.sourceId,
+    deliverySourceFile: delivery.sourceFile,
+    deliveryLineNumber: delivery.lineNumber,
+    deliveryTimestampIso: delivery.timestampIso,
+    deliveryMessage: delivery.originalMessage,
   };
 }
 
@@ -1175,7 +1233,9 @@ function updateMetricSourceDelivery(
   if (!source) return;
   source.classification = metricClassification(pickup.classification);
   source.deliveryMessageId = delivery.id;
+  source.deliveryReportImportId = delivery.reportImportId;
   source.deliverySourceId = delivery.sourceId;
+  source.deliverySourceFile = delivery.sourceFile;
   source.deliveryLineNumber = delivery.lineNumber;
   source.deliveryTimestampIso = delivery.timestampIso;
   source.deliveryMessage = delivery.originalMessage;
@@ -1554,6 +1614,7 @@ function parseRelevantEntry(
   const timestampIso = new Date(timestampMs).toISOString();
   const status = statusDetection.status;
   const period = isNightTimestamp(timestampMs) ? 'night' : 'day';
+  const paidReturnLocationQuantity = detectPaidReturnLocationQuantity(entry.message, status);
   const zoneResult = detectDeliveryZones(entry.message, status, quantity);
   reviewReasons.push(...zoneResult.reviewReasons);
   const outsideKilometers = detectOutsideKilometers(entry.message);
@@ -1597,6 +1658,7 @@ function parseRelevantEntry(
       paidOutsideKilometers: paidClassification.paidOutsideKilometers,
       paidOutsideAmountLei: paidClassification.paidOutsideAmountLei,
       paidSource: paidClassification.paidSource,
+      paidReturnLocationQuantity,
       note,
       confidence,
       needsReview: reviewReasons.length > 0,
@@ -2221,6 +2283,7 @@ function normalizeParsedDeliveryMessage(message: ParsedDeliveryMessage): ParsedD
   const quantity = positiveNumber(message.quantity, 1);
   const originalMessage = message.originalMessage ?? message.note ?? '';
   const status: ParsedDeliveryMessage['status'] = message.status === 'livrat' ? 'livrat' : 'ridicat';
+  const paidReturnLocationQuantity = detectPaidReturnLocationQuantity(originalMessage, status);
   const period = message.period === 'night' || message.period === 'day'
     ? message.period
     : isNightTimestamp(timestampMs)
@@ -2251,6 +2314,7 @@ function normalizeParsedDeliveryMessage(message: ParsedDeliveryMessage): ParsedD
       paidOutsideKilometers: positiveNumber(message.paidOutsideKilometers, 0),
       paidOutsideAmountLei: positiveNumber(message.paidOutsideAmountLei, 0),
       paidSource: normalizePaidSource(message.paidSource),
+      paidReturnLocationQuantity,
       autoCountable: message.autoCountable !== false,
       reviewReasons: Array.isArray(message.reviewReasons) ? message.reviewReasons : [],
     };
@@ -2288,6 +2352,7 @@ function normalizeParsedDeliveryMessage(message: ParsedDeliveryMessage): ParsedD
     paidOutsideKilometers: paidClassification.paidOutsideKilometers,
     paidOutsideAmountLei: paidClassification.paidOutsideAmountLei,
     paidSource: paidClassification.paidSource,
+    paidReturnLocationQuantity,
     autoCountable: message.autoCountable !== false,
     needsReview: true,
     reviewReasons,
@@ -2349,11 +2414,15 @@ function classifyPaidDelivery(
     };
   }
 
-  const paidQuantity = Math.max(1, quantity);
+  const paidQuantity = Math.max(0, quantity - detectExplicitCanceledQuantity(message, quantity));
   const outsideAmountLei = detectOutsideAmountLei(message);
   const outsideKilometers = detectOutsideKilometers(message);
   const source: PaidSource = isReturn ? 'return' : hasCompletion ? 'completion' : 'pickup';
   const hasOutsideValue = outsideAmountLei > 0 || outsideKilometers > 0;
+  if (paidQuantity === 0) {
+    return createEmptyPaidClassification();
+  }
+
   const zoneClassification = classifyPaidZones(message, paidQuantity, !hasOutsideValue);
   reviewReasons.push(...zoneClassification.reviewReasons);
 
@@ -2601,6 +2670,35 @@ function buildDeliveryClassificationUnits(message: ParsedDeliveryMessage): PaidU
   return units.slice(0, message.quantity);
 }
 
+function buildPaidReturnLocationUnits(message: ParsedDeliveryMessage): PaidUnitClassification[] {
+  if (message.status !== 'livrat' || message.paidReturnLocationQuantity !== 1) {
+    return [];
+  }
+
+  // A confirmed return to the restaurant is paid as one normal Z1 route.
+  return [{ kind: 'zone', zone: 1, explicit: true }];
+}
+
+function applyPaidReturnLocationUnitToSummaries(
+  summary: CourierSummary,
+  restaurantSummary: RestaurantSummary,
+  dailySummary: DailyCourierSummary,
+  period: 'day' | 'night',
+  unit: PaidUnitClassification,
+): void {
+  applyPaidUnitToSummaries(summary, restaurantSummary, dailySummary, period, unit, 1);
+  if (period === 'night') {
+    summary.nightDelivered += 1;
+    restaurantSummary.nightDelivered += 1;
+    dailySummary.nightDelivered += 1;
+    return;
+  }
+
+  summary.delivered += 1;
+  restaurantSummary.delivered += 1;
+  dailySummary.delivered += 1;
+}
+
 function applyPaidUnitToSummaries(
   summary: CourierSummary,
   restaurantSummary: RestaurantSummary,
@@ -2845,14 +2943,51 @@ function isDirectReturnAction(message: string): boolean {
     new RegExp(`^anulat[ăa]?\\s*\\(\\s*retur\\s*\\)${allowedSuffix}`).test(normalized);
 }
 
+function detectPaidReturnLocationQuantity(
+  message: string,
+  status: ParsedDeliveryMessage['status'],
+): number {
+  if (status !== 'livrat' || !isConciseOperationalAction(message)) {
+    return 0;
+  }
+
+  const normalized = normalizeWord(message).trim();
+  const isDirectDelivery = /^(?:[>*•-]\s*)?(?:am\s+)?livrat\b/.test(normalized);
+  const hasReturnLocation = /\bretur\s+locatie\b/.test(normalized);
+  const hasCanceledOrRefusedOrder = /\b(?:comanda\s+)?(?:anulata|refuzata)\b/.test(normalized);
+
+  // Do not infer payment from a narrative mention. The operational delivery must
+  // explicitly identify both the cancelled/refused order and the return location.
+  return isDirectDelivery && hasReturnLocation && hasCanceledOrRefusedOrder ? 1 : 0;
+}
+
+function detectExplicitCanceledQuantity(message: string, maximumQuantity: number): number {
+  const normalized = normalizeWord(message);
+  if (!CANCELED_REGEX.test(normalized) && !REFUSED_REGEX.test(normalized)) {
+    return 0;
+  }
+  CANCELED_REGEX.lastIndex = 0;
+  REFUSED_REGEX.lastIndex = 0;
+
+  const matches = normalized.matchAll(
+    /(?:\b(\d+)\s*x\s*(?:comanda\s*)?(?:anulata|refuzata)\b|\bx\s*(\d+)\s*(?:comanda\s*)?(?:anulata|refuzata)\b)/g,
+  );
+  const canceledQuantity = Array.from(matches).reduce((total, match) => {
+    const quantity = Number.parseInt(match[1] ?? match[2] ?? '0', 10);
+    return Number.isFinite(quantity) && quantity > 0 ? total + quantity : total;
+  }, 0);
+
+  return Math.min(Math.max(0, canceledQuantity), Math.max(0, maximumQuantity));
+}
+
 function hasOutsideZoneMention(message: string): boolean {
   const zones = Array.from(message.matchAll(ZONE_REGEX), (match) => Number(match[1]));
   ZONE_REGEX.lastIndex = 0;
   return zones.some((zone) => zone > 3);
 }
 
-function deliveryQueueKey(restaurantName: string, courierId: string): string {
-  return `${restaurantName.toLocaleLowerCase('ro-RO')}:${courierId}`;
+function deliveryQueueKey(restaurantName: string, courierId: string, reportImportId?: string): string {
+  return `${reportImportId ?? 'legacy-import'}:${restaurantName.toLocaleLowerCase('ro-RO')}:${courierId}`;
 }
 
 function takePickupForDelivery(

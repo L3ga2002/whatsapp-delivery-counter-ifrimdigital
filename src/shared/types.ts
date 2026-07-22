@@ -15,7 +15,7 @@ export type ReportImportRole = 'restaurant' | 'workHours' | 'mixed';
 export type ExportScope = 'full' | 'global' | 'restaurants' | 'review' | 'workHours';
 export type RestaurantTariffPolicy = 'day_only' | 'night_after_23';
 
-export const PARSER_VERSION = '0.4.1';
+export const PARSER_VERSION = '0.4.2';
 
 export interface RestaurantSchedule {
   openingTime: string;
@@ -38,6 +38,8 @@ export interface ParsedDeliveryMessage {
   id: string;
   sourceId: string;
   sourceFile: string;
+  /** Stable report-import owner, assigned when a saved report is scanned. */
+  reportImportId?: string;
   restaurantId?: string;
   restaurantName: string;
   lineNumber: number;
@@ -64,6 +66,12 @@ export interface ParsedDeliveryMessage {
   paidOutsideKilometers: number;
   paidOutsideAmountLei: number;
   paidSource: PaidSource;
+  /**
+   * An explicit paid Z1 return leg declared on a delivery message, for example
+   * "Livrat x2 (1x comanda refuzata, retur locatie)". It is deliberately
+   * separate from pickup payment so the original delivery count remains auditable.
+   */
+  paidReturnLocationQuantity?: number;
   note: string;
   confidence: ConfidenceLevel;
   needsReview: boolean;
@@ -389,6 +397,17 @@ export type MetricSourceKey =
   | 'nightZone3'
   | 'nightSpecial';
 
+export interface SourceMessageAnchor {
+  id: string;
+  reportImportId?: string;
+  sourceId: string;
+  sourceFile?: string;
+  lineNumber: number;
+  timestampIso?: string;
+  originalMessage?: string;
+  role: 'pickup' | 'delivery';
+}
+
 export interface MetricSourceRecord {
   id: string;
   period: 'day' | 'night';
@@ -397,13 +416,18 @@ export interface MetricSourceRecord {
   restaurantName: string;
   courierName: string;
   dayKey: string;
+  reportImportId?: string;
   pickupMessageId: string;
   pickupSourceId: string;
+  pickupSourceFile: string;
   pickupLineNumber: number;
   pickupTimestampIso: string;
   pickupMessage: string;
   deliveryMessageId?: string;
+  /** Saved import that owns the delivery anchor; it can differ from the pickup import. */
+  deliveryReportImportId?: string;
   deliverySourceId?: string;
+  deliverySourceFile?: string;
   deliveryLineNumber?: number;
   deliveryTimestampIso?: string;
   deliveryMessage?: string;
@@ -463,6 +487,7 @@ export interface MetricSourceReviewRow {
   restaurantName: string;
   courierName: string;
   sourceMessageIds: string[];
+  sourceAnchors?: SourceMessageAnchor[];
   reason: string;
 }
 

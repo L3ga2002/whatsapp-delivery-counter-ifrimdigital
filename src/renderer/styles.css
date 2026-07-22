@@ -71,6 +71,45 @@ button {
   font-weight: 750;
 }
 
+.confirmation-backdrop {
+  position: fixed;
+  z-index: 400;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(19, 25, 32, 0.48);
+}
+
+.confirmation-dialog {
+  width: min(460px, 100%);
+  padding: 22px;
+  border: 1px solid #e1c7b0;
+  border-radius: 8px;
+  color: #20252c;
+  background: #fffdf9;
+  box-shadow: 0 22px 58px rgba(19, 25, 32, 0.28);
+}
+
+.confirmation-dialog h2 {
+  margin: 0;
+  color: var(--brand-dark);
+  font-size: 1.1rem;
+}
+
+.confirmation-dialog p {
+  margin: 10px 0 0;
+  color: #586576;
+  line-height: 1.5;
+}
+
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -1882,6 +1921,9 @@ select:focus {
   width: min(360px, 74vw);
   max-height: 340px;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  pointer-events: auto;
   padding: 10px;
   border: 1px solid #e4a063;
   border-radius: 8px;

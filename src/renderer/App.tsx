@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type ExcelJS from 'exceljs';
 import { DayPicker } from 'react-day-picker';
 import { ro } from 'date-fns/locale';
@@ -77,6 +77,23 @@ type ImportRange = { fromIso: string; toIso: string; deliveryCount: number; avai
 type ImportUiMode = 'restaurant' | 'workHours';
 type ReportStep = 'interval' | 'imports' | 'review-imports' | 'scan' | 'results';
 type ResultTab = 'couriers' | 'restaurants' | 'daily' | 'night' | 'times' | 'workHours' | 'review';
+type ConfirmationRequest = {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  tone?: 'danger' | 'primary';
+};
+type SourceContextTarget = {
+  id: string;
+  reportImportId?: string;
+  sourceId: string;
+  sourceFile?: string;
+  lineNumber: number;
+  timestampIso: string;
+  restaurantName: string;
+  senderRaw: string;
+  originalMessage: string;
+};
 
 export default function App(): JSX.Element {
   const desktopApi = window.deliveryCounter;
@@ -91,6 +108,8 @@ export default function App(): JSX.Element {
   const [exportOptions, setExportOptions] = useState<ExportOptions>(defaultExportOptions);
   const [activeReviewRow, setActiveReviewRow] = useState<ReviewRow | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
+  const confirmationResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
   const selectedReport = workspace?.reports.find((item) => item.id === selectedReportId) ?? null;
   const selectedReportImports = useMemo(
@@ -131,6 +150,26 @@ export default function App(): JSX.Element {
       setScanOptions(workspace.reports[0].scanOptions);
     }
   }, [selectedReportId, workspace]);
+
+  const requestConfirmation = useCallback((request: ConfirmationRequest): Promise<boolean> => {
+    confirmationResolverRef.current?.(false);
+    return new Promise<boolean>((resolve) => {
+      confirmationResolverRef.current = resolve;
+      setConfirmation(request);
+    });
+  }, []);
+
+  const resolveConfirmation = useCallback((confirmed: boolean): void => {
+    const resolve = confirmationResolverRef.current;
+    confirmationResolverRef.current = null;
+    setConfirmation(null);
+    resolve?.(confirmed);
+  }, []);
+
+  useEffect(() => () => {
+    confirmationResolverRef.current?.(false);
+    confirmationResolverRef.current = null;
+  }, []);
 
   const reloadWorkspace = async (): Promise<void> => {
     if (!desktopApi) {
@@ -183,11 +222,14 @@ export default function App(): JSX.Element {
       return;
     }
     const isUsed = workspace.reportImports.some((item) => item.restaurantId === restaurantId);
-    const confirmed = window.confirm(
-      isUsed
+    const confirmed = await requestConfirmation({
+      title: 'Sterge restaurant',
+      message: isUsed
         ? `Restaurantul "${restaurant.name}" este folosit in rapoarte/importuri. Il dezactivez pentru importuri noi, dar pastrez istoricul. Continui?`
         : `Stergi restaurantul "${restaurant.name}" din workspace?`,
-    );
+      confirmLabel: 'Sterge',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -248,7 +290,12 @@ export default function App(): JSX.Element {
       setNotice({ kind: 'error', text: 'Curierul selectat nu mai exista in workspace.' });
       return;
     }
-    const confirmed = window.confirm(`Stergi definitiv curierul "${courier.name}"? Asocierea poate fi facuta din nou ulterior.`);
+    const confirmed = await requestConfirmation({
+      title: 'Sterge curier',
+      message: `Stergi definitiv curierul "${courier.name}"? Asocierea poate fi facuta din nou ulterior.`,
+      confirmLabel: 'Sterge',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -336,9 +383,12 @@ export default function App(): JSX.Element {
       return;
     }
     const importCount = workspace?.reportImports.filter((item) => item.reportId === reportToDelete.id).length ?? 0;
-    const confirmed = window.confirm(
-      `Stergi raportul "${reportToDelete.name}"?${importCount ? ` Se sterg si cele ${importCount} importuri/conversatii atasate acestui raport.` : ''}`,
-    );
+    const confirmed = await requestConfirmation({
+      title: 'Sterge raport',
+      message: `Stergi raportul "${reportToDelete.name}"?${importCount ? ` Se sterg si cele ${importCount} importuri/conversatii atasate acestui raport.` : ''}`,
+      confirmLabel: 'Sterge raportul',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -391,9 +441,12 @@ export default function App(): JSX.Element {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Sterg importul "${importItem.sourceLabel}" din raport? Conversatia salvata local pentru acest import va fi eliminata.`,
-    );
+    const confirmed = await requestConfirmation({
+      title: 'Sterge import',
+      message: `Sterg importul "${importItem.sourceLabel}" din raport? Conversatia salvata local pentru acest import va fi eliminata.`,
+      confirmLabel: 'Sterge importul',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -421,9 +474,12 @@ export default function App(): JSX.Element {
       setNotice({ kind: 'info', text: 'Nu exista conversatii salvate local.' });
       return;
     }
-    const confirmed = window.confirm(
-      `Stergi toate cele ${importCount} importuri/conversatii salvate local? Restaurantele, curierii si rapoartele raman, dar va trebui sa reimporti conversatiile pentru scanari noi.`,
-    );
+    const confirmed = await requestConfirmation({
+      title: 'Sterge conversatiile salvate',
+      message: `Stergi toate cele ${importCount} importuri/conversatii salvate local? Restaurantele, curierii si rapoartele raman, dar va trebui sa reimporti conversatiile pentru scanari noi.`,
+      confirmLabel: 'Sterge conversatiile',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -461,9 +517,12 @@ export default function App(): JSX.Element {
     if (!desktopApi || isBusy || !workspace) {
       return;
     }
-    const confirmed = window.confirm(
-      `Stergi conversatiile/importurile mai vechi de ${retentionDays} zile? Restaurantele, curierii si rapoartele raman in workspace.`,
-    );
+    const confirmed = await requestConfirmation({
+      title: 'Sterge importurile vechi',
+      message: `Stergi conversatiile/importurile mai vechi de ${retentionDays} zile? Restaurantele, curierii si rapoartele raman in workspace.`,
+      confirmLabel: 'Sterge importurile',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -502,9 +561,12 @@ export default function App(): JSX.Element {
     if (!desktopApi || isBusy) {
       return;
     }
-    const confirmed = window.confirm(
-      'Restaurezi un backup local? Workspace-ul curent va fi inlocuit, iar aplicatia pastreaza automat o copie inainte de restore.',
-    );
+    const confirmed = await requestConfirmation({
+      title: 'Restaureaza backup',
+      message: 'Restaurezi un backup local? Workspace-ul curent va fi inlocuit, iar aplicatia pastreaza automat o copie inainte de restore.',
+      confirmLabel: 'Restaureaza',
+      tone: 'danger',
+    });
     if (!confirmed) {
       return;
     }
@@ -652,7 +714,8 @@ export default function App(): JSX.Element {
   }
 
   return (
-    <main className="workspace-app">
+    <>
+      <main className="workspace-app">
       <aside className="sidebar">
         <div className="brand-block">
           <span>IfrimDigital</span>
@@ -694,6 +757,7 @@ export default function App(): JSX.Element {
             restaurants={workspace.restaurants}
             onSave={handleSaveRestaurant}
             onDelete={handleDeleteRestaurant}
+            onConfirmDiscard={requestConfirmation}
             isBusy={isBusy}
           />
         ) : null}
@@ -703,6 +767,7 @@ export default function App(): JSX.Element {
             reportImports={workspace.reportImports}
             onSave={handleSaveCourier}
             onDelete={handleDeleteCourier}
+            onConfirmDiscard={requestConfirmation}
             isBusy={isBusy}
           />
         ) : null}
@@ -754,7 +819,65 @@ export default function App(): JSX.Element {
           />
         ) : null}
       </section>
-    </main>
+      </main>
+      <ConfirmDialog request={confirmation} onResolve={resolveConfirmation} />
+    </>
+  );
+}
+
+function ConfirmDialog({
+  request,
+  onResolve,
+}: {
+  request: ConfirmationRequest | null;
+  onResolve: (confirmed: boolean) => void;
+}): JSX.Element | null {
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!request) return;
+    const focusTimer = window.setTimeout(() => cancelButtonRef.current?.focus(), 0);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onResolve(false);
+      }
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [onResolve, request]);
+
+  if (!request) return null;
+  return (
+    <div
+      className="confirmation-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onResolve(false);
+      }}
+    >
+      <section
+        className="confirmation-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirmation-title"
+        aria-describedby="confirmation-message"
+      >
+        <h2 id="confirmation-title">{request.title}</h2>
+        <p id="confirmation-message">{request.message}</p>
+        <div className="confirmation-actions">
+          <button ref={cancelButtonRef} className="secondary-button" type="button" onClick={() => onResolve(false)}>
+            Anuleaza
+          </button>
+          <button className={request.tone === 'danger' ? 'danger-button' : 'primary-button'} type="button" onClick={() => onResolve(true)}>
+            {request.confirmLabel ?? 'Confirma'}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -839,11 +962,13 @@ function RestaurantsView({
   restaurants,
   onSave,
   onDelete,
+  onConfirmDiscard,
   isBusy,
 }: {
   restaurants: Restaurant[];
   onSave: (input: RestaurantInput) => Promise<Restaurant | null>;
   onDelete: (restaurantId: string) => Promise<void>;
+  onConfirmDiscard: (request: ConfirmationRequest) => Promise<boolean>;
   isBusy: boolean;
 }): JSX.Element {
   const emptyDraft: {
@@ -876,10 +1001,14 @@ function RestaurantsView({
     setInitialDraft(emptyDraft);
   };
 
-  const editRestaurant = (restaurantId: string): void => {
+  const editRestaurant = async (restaurantId: string): Promise<void> => {
     const restaurant = restaurants.find((item) => item.id === restaurantId);
     if (!restaurant) return;
-    if (isDirty && !window.confirm('Ai modificari nesalvate. Renunti la ele?')) return;
+    if (isDirty && !(await onConfirmDiscard({
+      title: 'Renunta la modificari?',
+      message: 'Ai modificari nesalvate. Renunti la ele?',
+      confirmLabel: 'Renunta',
+    }))) return;
     const nextDraft = {
       id: restaurant.id,
       name: restaurant.name,
@@ -970,12 +1099,14 @@ function CouriersView({
   reportImports,
   onSave,
   onDelete,
+  onConfirmDiscard,
   isBusy,
 }: {
   couriers: Courier[];
   reportImports: ReportImport[];
   onSave: (input: CourierInput) => Promise<boolean>;
   onDelete: (courierId: string) => Promise<void>;
+  onConfirmDiscard: (request: ConfirmationRequest) => Promise<boolean>;
   isBusy: boolean;
 }): JSX.Element {
   const emptyDraft = { id: '', name: '', phone: '', aliases: '', notes: '' };
@@ -997,8 +1128,12 @@ function CouriersView({
     setInitialDraft(emptyDraft);
   };
 
-  const confirmDiscard = (): boolean => (
-    !isDirty || window.confirm('Ai modificari nesalvate. Renunti la ele?')
+  const confirmDiscard = async (): Promise<boolean> => (
+    !isDirty || await onConfirmDiscard({
+      title: 'Renunta la modificari?',
+      message: 'Ai modificari nesalvate. Renunti la ele?',
+      confirmLabel: 'Renunta',
+    })
   );
 
   return (
@@ -1011,8 +1146,8 @@ function CouriersView({
           { label: 'Nume curier', value: draft.name, onChange: (value) => setDraft((current) => ({ ...current, name: value })) },
         ]}
         submitLabel={isBusy ? 'Se salveaza...' : isEditing ? 'Salveaza modificarile' : 'Salveaza curierul'}
-        onCancel={isEditing ? () => {
-          if (confirmDiscard()) resetDraft();
+        onCancel={isEditing ? async () => {
+          if (await confirmDiscard()) resetDraft();
         } : undefined}
         onSubmit={async () => {
           const saved = await onSave({
@@ -1110,11 +1245,11 @@ function CouriersView({
           meta: courier.isActive ? 'activ' : 'inactiv',
           inactive: !courier.isActive,
         }))}
-        onEdit={(courierId) => {
+        onEdit={async (courierId) => {
           const courier = couriers.find((item) => item.id === courierId);
           if (!courier) return;
           if (courier.id === draft.id) return;
-          if (!confirmDiscard()) return;
+          if (!(await confirmDiscard())) return;
           const nextDraft = {
             id: courier.id,
             name: courier.name,
@@ -2530,30 +2665,19 @@ function MetricSourceButton({
   const controlRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<number | null>(null);
-  const closeTimerRef = useRef<number | null>(null);
   const sources = groupMetricSources(findMetricSources(report.metricSources, metric, filter));
   const clearTimer = (): void => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = null;
   };
-  const clearCloseTimer = (): void => {
-    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = null;
-  };
   const closePopover = (restoreFocus = false): void => {
-    clearCloseTimer();
     clearTimer();
     setIsOpen(false);
     if (restoreFocus) {
       window.setTimeout(() => buttonRef.current?.focus(), 0);
     }
   };
-  const scheduleClose = (): void => {
-    clearCloseTimer();
-    closeTimerRef.current = window.setTimeout(() => closePopover(), 260);
-  };
   const openPopover = (): void => {
-    clearCloseTimer();
     const bounds = controlRef.current?.getBoundingClientRect();
     if (bounds) {
       setPopoverPosition({
@@ -2565,10 +2689,15 @@ function MetricSourceButton({
   };
   const scheduleOpen = (): void => {
     clearTimer();
-    clearCloseTimer();
-    timerRef.current = window.setTimeout(openPopover, 900);
+    if (!isOpen) {
+      timerRef.current = window.setTimeout(openPopover, 550);
+    }
   };
-  useEffect(() => () => { clearTimer(); clearCloseTimer(); }, []);
+  const scheduleClose = (): void => {
+    clearTimer();
+    timerRef.current = window.setTimeout(() => closePopover(), 180);
+  };
+  useEffect(() => () => { clearTimer(); }, []);
   useEffect(() => {
     if (!isOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent): void => {
@@ -2586,21 +2715,19 @@ function MetricSourceButton({
     document.addEventListener('pointerdown', closeOnOutsidePointer, true);
     document.addEventListener('keydown', closeOnEscape);
     window.addEventListener('resize', closeOnViewportChange);
-    window.addEventListener('scroll', closeOnViewportChange, true);
     return () => {
       document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
       document.removeEventListener('keydown', closeOnEscape);
       window.removeEventListener('resize', closeOnViewportChange);
-      window.removeEventListener('scroll', closeOnViewportChange, true);
     };
   }, [isOpen]);
   if (value === 0 || sources.length === 0) return <span>{formatter?.() ?? value}</span>;
   return (
-    <span ref={controlRef} className="metric-source-control" onMouseEnter={scheduleOpen} onMouseLeave={() => { clearTimer(); scheduleClose(); }}>
-      <button ref={buttonRef} className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); clearCloseTimer(); isOpen ? closePopover() : openPopover(); }}>
+    <span ref={controlRef} className="metric-source-control" onPointerEnter={scheduleOpen} onPointerLeave={scheduleClose}>
+      <button ref={buttonRef} className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); isOpen ? closePopover() : openPopover(); }}>
         {formatter?.() ?? value}
       </button>
-      {isOpen ? <div className="metric-source-popover" role="dialog" aria-label={`Comenzi pentru ${label}`} style={popoverPosition ?? undefined} onMouseEnter={clearCloseTimer} onMouseLeave={scheduleClose}>
+      {isOpen ? <div className="metric-source-popover" role="dialog" aria-label={`Comenzi pentru ${label}`} style={popoverPosition ?? undefined} onPointerEnter={clearTimer} onPointerLeave={scheduleClose}>
         <strong>{label}</strong><span>{sources.reduce((total, source) => total + source.quantity, 0)} comenzi</span>
         <div>{sources.map((source) => <button type="button" key={source.id} onClick={() => { closePopover(); onOpenSource(source.record); }}>
           <strong>{formatDateTime(source.record.pickupTimestampIso)}</strong><span>{source.record.restaurantName} · ridicat x{source.quantity}{source.record.deliveryTimestampIso ? ` · livrat ${formatDateTime(source.record.deliveryTimestampIso).split(', ')[1] ?? ''}` : ''}</span>
@@ -2636,7 +2763,10 @@ function metricSourceMatches(source: MetricSourceRecord, metric: MetricSourceKey
 function groupMetricSources(sources: MetricSourceRecord[]): Array<{ id: string; quantity: number; record: MetricSourceRecord }> {
   const groups = new Map<string, { id: string; quantity: number; record: MetricSourceRecord }>();
   for (const source of sources) {
-    const key = `${source.pickupMessageId}:${source.classification}`;
+    // The same chat can be imported again into another saved report. Keep its
+    // metric drill-down separate so the click always opens the exact import.
+    const importScope = source.reportImportId ?? source.pickupSourceFile;
+    const key = `${importScope}:${source.pickupMessageId}:${source.classification}`;
     const current = groups.get(key);
     if (current) {
       current.quantity += 1;
@@ -2659,6 +2789,30 @@ function openMetricSource(
     restaurantName: source.restaurantName,
     courierName: source.courierName,
     sourceMessageIds: [source.pickupMessageId, ...(source.deliveryMessageId ? [source.deliveryMessageId] : [])],
+    sourceAnchors: [
+      {
+        id: `pickup-${source.id}`,
+        reportImportId: source.reportImportId,
+        sourceId: source.pickupSourceId,
+        sourceFile: source.pickupSourceFile,
+        lineNumber: source.pickupLineNumber,
+        timestampIso: source.pickupTimestampIso,
+        originalMessage: source.pickupMessage,
+        role: 'pickup',
+      },
+      ...(source.deliveryMessageId && source.deliverySourceId && source.deliveryLineNumber
+        ? [{
+          id: `delivery-${source.id}`,
+          reportImportId: source.deliveryReportImportId ?? source.reportImportId,
+          sourceId: source.deliverySourceId,
+          sourceFile: source.deliverySourceFile,
+          lineNumber: source.deliveryLineNumber,
+          timestampIso: source.deliveryTimestampIso,
+          originalMessage: source.deliveryMessage,
+          role: 'delivery' as const,
+        }]
+        : []),
+    ],
     reason: `Comanda ridicata la ${formatDateTime(source.pickupTimestampIso)}${source.deliveryTimestampIso ? ` si livrata la ${formatDateTime(source.deliveryTimestampIso)}` : ''}.`,
   });
   setActiveTab('review');
@@ -2866,29 +3020,48 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
   const [linesAfter, setLinesAfter] = useState(80);
   const [visibleTargets, setVisibleTargets] = useState(80);
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
-  const files = useMemo(() => imports.flatMap((item) => item.importResult.files ?? []), [imports]);
+  const importedFiles = useMemo(
+    () => imports.flatMap((item) => (item.importResult.files ?? []).map((file) => ({ file, reportImportId: item.id }))),
+    [imports],
+  );
   const lineIndexBySource = useMemo(() => {
     const index = new Map<string, number>();
-    for (const file of files) {
+    for (const { file, reportImportId } of importedFiles) {
       for (let lineIndex = 0; lineIndex < file.conversationLines.length; lineIndex += 1) {
-        index.set(`${file.sourceId}:${file.conversationLines[lineIndex].lineNumber}`, lineIndex);
+        index.set(`${reportImportId}:${file.sourceId}:${file.conversationLines[lineIndex].lineNumber}`, lineIndex);
       }
     }
     return index;
-  }, [files]);
+  }, [importedFiles]);
   const sourceMessages = useMemo(
-    () => imports.flatMap((item) => item.importResult.messages),
+    () => imports.flatMap((item) => item.importResult.messages.map((message) => ({ message, reportImportId: item.id }))),
     [imports],
   );
-  const targets = useMemo(() => {
+  const targets = useMemo<SourceContextTarget[]>(() => {
+    if (row.kind === 'metric-source' && row.sourceAnchors?.length) {
+      return row.sourceAnchors.map((anchor) => ({
+        id: anchor.id,
+        reportImportId: anchor.reportImportId,
+        sourceId: anchor.sourceId,
+        sourceFile: anchor.sourceFile,
+        lineNumber: anchor.lineNumber,
+        timestampIso: anchor.timestampIso ?? '',
+        restaurantName: row.restaurantName,
+        senderRaw: row.courierName,
+        originalMessage: anchor.originalMessage ?? '',
+      }));
+    }
+
     if (row.kind === 'mismatch' || row.kind === 'metric-source') {
       const ids = new Set(row.sourceMessageIds);
       return sourceMessages
-        .filter((message) => ids.has(message.id))
-        .sort((left, right) => left.timestampMs - right.timestampMs)
-        .map((message) => ({
-          id: message.id,
+        .filter(({ message }) => ids.has(message.id))
+        .sort((left, right) => left.message.timestampMs - right.message.timestampMs)
+        .map(({ message, reportImportId }) => ({
+          id: `${reportImportId}:${message.id}`,
+          reportImportId,
           sourceId: message.sourceId,
+          sourceFile: message.sourceFile,
           lineNumber: message.lineNumber,
           timestampIso: message.timestampIso,
           restaurantName: message.restaurantName,
@@ -2900,6 +3073,7 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
     return [{
       id: row.id,
       sourceId: row.sourceId,
+      sourceFile: row.sourceFile,
       lineNumber: row.lineNumber,
       timestampIso: row.timestampIso,
       restaurantName: row.restaurantName,
@@ -2921,14 +3095,17 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
 
   const contextFiles = useMemo(() => {
     if (!activeTarget) return [];
-    const file = files.find((candidate) => candidate.sourceId === activeTarget.sourceId);
-    if (!file) return [];
+    const importedFile = importedFiles.find(({ file, reportImportId }) =>
+      file.sourceId === activeTarget.sourceId &&
+      (!activeTarget.reportImportId || reportImportId === activeTarget.reportImportId) &&
+      (!activeTarget.sourceFile || file.sourceFile === activeTarget.sourceFile),
+    );
+    if (!importedFile) return [];
+    const { file, reportImportId } = importedFile;
 
     const lines = file.conversationLines ?? [];
-    const targetIndex = Math.max(
-      0,
-      lineIndexBySource.get(`${file.sourceId}:${activeTarget.lineNumber}`) ?? 0,
-    );
+    const targetIndex = lineIndexBySource.get(`${reportImportId}:${file.sourceId}:${activeTarget.lineNumber}`);
+    if (targetIndex === undefined) return [];
     const startIndex = Math.max(0, targetIndex - linesBefore);
     const endIndex = Math.min(lines.length, targetIndex + linesAfter + 1);
     return [{
@@ -2937,7 +3114,7 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
       hiddenBefore: startIndex,
       hiddenAfter: lines.length - endIndex,
     }];
-  }, [activeTarget, files, lineIndexBySource, linesAfter, linesBefore]);
+  }, [activeTarget, importedFiles, lineIndexBySource, linesAfter, linesBefore]);
 
   return (
     <div className="review-context">
