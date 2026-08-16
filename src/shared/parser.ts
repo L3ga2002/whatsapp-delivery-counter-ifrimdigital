@@ -30,11 +30,12 @@ const QUANTITY_REGEX = /(?:x\s*(\d+)\b|\b(\d+)\s*x\b)/i;
 const EDITED_MESSAGE_REGEX = /<\s*Acest mesaj a fost editat\s*>/i;
 const ZONE_REGEX = /\bzona\s*([1-9])\b/gi;
 const EXPLICIT_ZONE_QUANTITY_REGEX =
-  /(?:\b(\d+)\s*x\s*zona\s*([1-9])\b|x\s*(\d+)\s*zona\s*([1-9])\b|\bzona\s*([1-9])\s*(?:x\s*)?(\d+)\b)/gi;
+  /(?:\b(\d+)\s*x\s*zona\s*([1-9])\b|x\s*(\d+)\s*zona\s*([1-9])\b|\bzona\s*([1-9])\s*(?:x\s*)?(\d+)\b|\b(\d+)\s+(?:de\s+)?zona\s*([1-9])\b)/gi;
 const KILOMETER_REGEX = /(?:\bkm\s*(\d+(?:[.,]\d+)?)\b|\b(\d+(?:[.,]\d+)?)\s*(?:km|kilometri?)\b)/gi;
 const MONEY_REGEX = /\b(\d+(?:[.,]\d+)?)\s*(?:lei|ron)\b/gi;
 const COMPLETION_REGEX = /\bcompletare(?:\s+comanda)?\b/i;
 const RETURN_REGEX = /\bretur\b/i;
+const POS_MARKER_REGEX = /\bpos\b/i;
 const CANCELED_REGEX = /\banulat[ăa]?\b/i;
 const REFUSED_REGEX = /\brefuzat[ăa]?\b/i;
 const AVAILABILITY_REGEX = /\b(indisponibil|disponibil|indisp|disp|offline|online)\b/i;
@@ -1550,7 +1551,8 @@ function parseRelevantEntry(
     hasMoneyAmount ||
     hasZoneMention ||
     hasCompletion ||
-    hasDirectReturn;
+    hasDirectReturn ||
+    POS_MARKER_REGEX.test(entry.message);
   if (
     isConversationalStatusReference(
       entry.message,
@@ -2499,8 +2501,11 @@ function classifyPaidZones(
 
   if (quantityZoneMatches.length > 0) {
     for (const match of quantityZoneMatches) {
-      const zoneQuantity = Number.parseInt(match[1] ?? match[3] ?? match[6], 10);
-      const zoneNumber = Number(match[2] ?? match[4] ?? match[5]);
+      const parsedZoneQuantity = parseExplicitZoneQuantityMatch(match);
+      if (!parsedZoneQuantity) {
+        continue;
+      }
+      const { zoneQuantity, zoneNumber } = parsedZoneQuantity;
       if (zoneNumber > 3) {
         outsideZoneDeliveries += zoneQuantity;
       } else {
@@ -2563,8 +2568,11 @@ function detectDeliveryZones(
   EXPLICIT_ZONE_QUANTITY_REGEX.lastIndex = 0;
   if (quantityZoneMatches.length > 0) {
     for (const match of quantityZoneMatches) {
-      const zoneQuantity = Number.parseInt(match[1] ?? match[3] ?? match[6], 10);
-      const zoneNumber = Number(match[2] ?? match[4] ?? match[5]);
+      const parsedZoneQuantity = parseExplicitZoneQuantityMatch(match);
+      if (!parsedZoneQuantity) {
+        continue;
+      }
+      const { zoneQuantity, zoneNumber } = parsedZoneQuantity;
       incrementZone(zoneCounts, zoneNumber, zoneQuantity);
       if (zoneNumber > 3) {
         reviewReasons.push('Mesajul mentioneaza zona peste 3; este tratat ca exterior in calculul de plata.');
@@ -2589,6 +2597,17 @@ function detectDeliveryZones(
 
   reviewReasons.push('Mesajul contine mai multe zone fara cantitati clare.');
   return { zoneCounts, reviewReasons };
+}
+
+function parseExplicitZoneQuantityMatch(
+  match: RegExpMatchArray,
+): { zoneQuantity: number; zoneNumber: number } | null {
+  const zoneQuantity = Number.parseInt(match[1] ?? match[3] ?? match[6] ?? match[7], 10);
+  const zoneNumber = Number(match[2] ?? match[4] ?? match[5] ?? match[8]);
+  if (!Number.isInteger(zoneQuantity) || zoneQuantity <= 0 || !Number.isInteger(zoneNumber) || zoneNumber < 1) {
+    return null;
+  }
+  return { zoneQuantity, zoneNumber };
 }
 
 function buildPaidUnits(message: ParsedDeliveryMessage): PaidUnitClassification[] {
@@ -2814,6 +2833,9 @@ function reconcileDeliveryClassification(
   }
 
   if (pickup.classification.explicit && !sameUnitClassification(pickup.classification, deliveryUnit)) {
+    applyPaidUnitToSummaries(summary, restaurantSummary, dailySummary, pickup.period, pickup.classification, -1);
+    applyPaidUnitToSummaries(summary, restaurantSummary, dailySummary, pickup.period, deliveryUnit, 1);
+    pickup.classification = deliveryUnit;
     reviewRows.push({
       kind: 'mismatch',
       id: `delivery-classification-conflict-${pickup.messageId}-${deliveryMessage.id}`,
@@ -2823,7 +2845,7 @@ function reconcileDeliveryClassification(
       pickedUp: 1,
       delivered: 1,
       difference: 0,
-      reason: 'Zona/exterior din livrat contrazice ridicarea explicita; calculul pastreaza ridicarea.',
+      reason: 'Zona/exterior din livrat corecteaza ridicarea explicita; calculul foloseste livratul si pastreaza cazul la review.',
       sourceMessageIds: [pickup.messageId, deliveryMessage.id],
     });
   }
@@ -2938,7 +2960,7 @@ function isDirectReturnAction(message: string): boolean {
   if (normalized.includes('?')) {
     return false;
   }
-  const allowedSuffix = '(?:\\s+(?:x\\s*\\d+|\\d+\\s*x|zona\\s*[1-3]|\\d+(?:[.,]\\d+)?\\s*lei))*\\s*[.!]?$';
+  const allowedSuffix = '(?:\\s+(?:x\\s*\\d+|\\d+\\s*x|zona\\s*[1-3]|pos|\\d+(?:[.,]\\d+)?\\s*lei))*\\s*[.!]?$';
   return new RegExp(`^(?:(?:x\\s*\\d+|\\d+\\s*x)\\s*)?retur\\b${allowedSuffix}`).test(normalized) ||
     new RegExp(`^anulat[ăa]?\\s*\\(\\s*retur\\s*\\)${allowedSuffix}`).test(normalized);
 }

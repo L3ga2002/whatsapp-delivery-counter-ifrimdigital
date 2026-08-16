@@ -408,6 +408,59 @@ describe('WhatsApp export parser', () => {
     });
   });
 
+  it('accepts client shorthand actions and zone allocations without x or parentheses', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 10:00 - Ana: Ridicat x1 completare comanda',
+        '30.05.2026, 10:10 - Ana: Completare comanda',
+        '30.05.2026, 10:20 - Ana: Ridicat pos',
+        '30.05.2026, 10:30 - Ana: Retur pos',
+        '30.05.2026, 10:40 - Ana: Preluat x3 (1 zona 2)',
+        '30.05.2026, 10:50 - Ana: Preluat x3 (2 zona 2)',
+        '30.05.2026, 11:00 - Ana: Preluat x3 (1 zona 2, 1 zona 3)',
+        '30.05.2026, 11:10 - Ana: Ridicat x2 1 zona 2',
+      ].join('\n'),
+      'chat.txt',
+    );
+
+    expect(parsed.messages).toHaveLength(8);
+    expect(parsed.messages[0]).toMatchObject({
+      paidSource: 'completion',
+      paidQuantity: 1,
+      paidZoneCounts: { zone1: 1, zone2: 0, zone3: 0 },
+    });
+    expect(parsed.messages[1]).toMatchObject({
+      paidSource: 'completion',
+      paidQuantity: 1,
+      paidZoneCounts: { zone1: 1, zone2: 0, zone3: 0 },
+    });
+    expect(parsed.messages[2]).toMatchObject({
+      paidQuantity: 1,
+      paidZoneCounts: { zone1: 1, zone2: 0, zone3: 0 },
+    });
+    expect(parsed.messages[3]).toMatchObject({
+      paidSource: 'return',
+      paidQuantity: 1,
+      paidZoneCounts: { zone1: 1, zone2: 0, zone3: 0 },
+    });
+    expect(parsed.messages[4]).toMatchObject({
+      paidQuantity: 3,
+      paidZoneCounts: { zone1: 2, zone2: 1, zone3: 0 },
+    });
+    expect(parsed.messages[5]).toMatchObject({
+      paidQuantity: 3,
+      paidZoneCounts: { zone1: 1, zone2: 2, zone3: 0 },
+    });
+    expect(parsed.messages[6]).toMatchObject({
+      paidQuantity: 3,
+      paidZoneCounts: { zone1: 1, zone2: 1, zone3: 1 },
+    });
+    expect(parsed.messages[7]).toMatchObject({
+      paidQuantity: 2,
+      paidZoneCounts: { zone1: 1, zone2: 1, zone3: 0 },
+    });
+  });
+
   it('counts glued quantities and multiple addresses conservatively', () => {
     const parsed = parseWhatsAppExport(
       [
@@ -485,11 +538,11 @@ describe('WhatsApp export parser', () => {
     expect(report.totalOutsideAmountLei).toBe(45);
   });
 
-  it('keeps explicit pickup classification when delivered classification conflicts', () => {
+  it('uses the delivered zone to correct an explicit pickup classification', () => {
     const parsed = parseWhatsAppExport(
       [
-        '30.05.2026, 10:00 - Ana: Ridicat x1 zona 2',
-        '30.05.2026, 10:20 - Ana: Livrat x1 zona 3',
+        '30.05.2026, 10:00 - Ana: Ridicat x1 zona 3',
+        '30.05.2026, 10:20 - Ana: Livrat x1 zona 2',
       ].join('\n'),
       'Conversație WhatsApp cu Restaurant Test.txt',
     );
@@ -506,7 +559,7 @@ describe('WhatsApp export parser', () => {
     expect(report.reviewRows).toContainEqual(
       expect.objectContaining({
         kind: 'mismatch',
-        reason: expect.stringContaining('contrazice ridicarea explicita'),
+        reason: expect.stringContaining('corecteaza ridicarea explicita'),
       }),
     );
   });

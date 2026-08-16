@@ -1,5 +1,12 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-08-16 - v0.3.22
+
+- Added additive parser support for `Completare comanda`, `Ridicat pos`, `Retur pos`, and pickup variants written as `Preluat` or `Luat`.
+- Added zone allocation tolerance for forms such as `1 zona 2` without the usual `x` or parentheses, while preserving the existing explicit forms.
+- Delivery zone/exterior details now correct an explicit pickup classification when the courier fixes the zone in the `Livrat` message; the source pair remains visible in Review.
+- Added parser regressions for the new client-provided message forms and the corrected pickup/delivery zone flow.
+
 ## 2026-07-20 - v0.3.19
 
 - Replaced the Windows-native restaurant schedule inputs with an explicit 24-hour selector: hours `00` through `23` and minutes `00` through `59`, independent of Windows AM/PM settings.
