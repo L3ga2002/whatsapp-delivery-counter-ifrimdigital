@@ -1,5 +1,11 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-08-17 - v0.3.23
+
+- Added additive parser support for plural zone wording such as `Ridicat x1 zone 2`, `Livrat x1 zone 2`, and mixed allocations such as `1 x zone 2`.
+- Preserved the existing singular `zona` forms and outside-zone handling.
+- Added regression coverage for plural zone wording in pickup, delivery, and paid zone allocation flows.
+
 ## 2026-08-16 - v0.3.22
 
 - Added additive parser support for `Completare comanda`, `Ridicat pos`, `Retur pos`, and pickup variants written as `Preluat` or `Luat`.

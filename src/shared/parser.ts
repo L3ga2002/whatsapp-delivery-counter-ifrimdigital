@@ -28,9 +28,9 @@ const ALL_STATUS_REGEX = /\b(ridicat|livrat|preluat|ridica|riscat|luat|livra[țt
 const DIRECT_STATUS_REGEX = /^\s*(?:[>*•-]\s*)?(?:am\s+)?(ridicat|livrat|preluat|ridica|riscat|luat|livra[țt]i)(?=\s|:|x\s*\d|\d|$)/i;
 const QUANTITY_REGEX = /(?:x\s*(\d+)\b|\b(\d+)\s*x\b)/i;
 const EDITED_MESSAGE_REGEX = /<\s*Acest mesaj a fost editat\s*>/i;
-const ZONE_REGEX = /\bzona\s*([1-9])\b/gi;
+const ZONE_REGEX = /\bzon(?:a|e)\s*([1-9])\b/gi;
 const EXPLICIT_ZONE_QUANTITY_REGEX =
-  /(?:\b(\d+)\s*x\s*zona\s*([1-9])\b|x\s*(\d+)\s*zona\s*([1-9])\b|\bzona\s*([1-9])\s*(?:x\s*)?(\d+)\b|\b(\d+)\s+(?:de\s+)?zona\s*([1-9])\b)/gi;
+  /(?:\b(\d+)\s*x\s*zon(?:a|e)\s*([1-9])\b|x\s*(\d+)\s*zon(?:a|e)\s*([1-9])\b|\bzon(?:a|e)\s*([1-9])\s*(?:x\s*)?(\d+)\b|\b(\d+)\s+(?:de\s+)?zon(?:a|e)\s*([1-9])\b)/gi;
 const KILOMETER_REGEX = /(?:\bkm\s*(\d+(?:[.,]\d+)?)\b|\b(\d+(?:[.,]\d+)?)\s*(?:km|kilometri?)\b)/gi;
 const MONEY_REGEX = /\b(\d+(?:[.,]\d+)?)\s*(?:lei|ron)\b/gi;
 const COMPLETION_REGEX = /\bcompletare(?:\s+comanda)?\b/i;

@@ -461,6 +461,31 @@ describe('WhatsApp export parser', () => {
     });
   });
 
+  it('accepts plural zone wording in pickup, delivery, and mixed allocations', () => {
+    const parsed = parseWhatsAppExport(
+      [
+        '30.05.2026, 12:00 - Ana: Ridicat x1 zone 2',
+        '30.05.2026, 12:10 - Ana: Livrat x1 zone 2',
+        '30.05.2026, 12:20 - Ana: Ridicat x2 (1 x zone 2)',
+      ].join('\n'),
+      'zone-plural.txt',
+    );
+
+    expect(parsed.messages).toHaveLength(3);
+    expect(parsed.messages[0]).toMatchObject({
+      paidQuantity: 1,
+      paidZoneCounts: { zone1: 0, zone2: 1, zone3: 0 },
+    });
+    expect(parsed.messages[1]).toMatchObject({
+      status: 'livrat',
+      zoneCounts: { zone1: 0, zone2: 1, zone3: 0 },
+    });
+    expect(parsed.messages[2]).toMatchObject({
+      paidQuantity: 2,
+      paidZoneCounts: { zone1: 1, zone2: 1, zone3: 0 },
+    });
+  });
+
   it('counts glued quantities and multiple addresses conservatively', () => {
     const parsed = parseWhatsAppExport(
       [
