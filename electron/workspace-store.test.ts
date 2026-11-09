@@ -1,15 +1,107 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceStore } from './workspace-store';
-import { filterMessagesForRestaurantSchedule } from '../src/shared/parser';
+import { filterMessagesForRestaurantSchedule, parseImportedTexts } from '../src/shared/parser';
 import type { ParsedDeliveryMessage } from '../src/shared/types';
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
+});
+
+describe('WorkspaceStore bounded session memory', () => {
+  const importData = () => {
+    const text = '02.11.2026, 12:00 - Curier WhatsApp: Ridicat x1\n02.11.2026, 12:10 - Curier WhatsApp: Livrat x1';
+    return parseImportedTexts([{ sourceFile: 'chat.txt', text, bytes: text.length }]);
+  };
+
+  it('keeps the workspace snapshot metadata-only and loads source evidence for the requested report', async () => {
+    const store = await createStore();
+    const restaurant = await store.saveRestaurant({ name: 'Test' });
+    const report = await store.saveReport({ name: 'Test', fromIso: '2026-11-02T00:00:00Z', toIso: '2026-11-03T00:00:00Z' });
+    const imported = await store.saveReportImport({ reportId: report.id, role: 'restaurant', restaurantId: restaurant.id }, importData());
+    expect(store.getSnapshot().reportImports).toMatchObject([{ id: imported.id, messageCount: 2 }]);
+    expect(store.getSnapshot().reportImports[0]).not.toHaveProperty('importResult');
+    expect(store.getSnapshot().reportImports[0].fromIso).toBe(imported.importResult.messages[0].timestampIso);
+    expect(store.getSnapshot().reportImports[0].toIso).toBe(imported.importResult.messages[1].timestampIso);
+    const loaded = store.listReportImports(report.id);
+    expect(loaded[0].importResult).toEqual(imported.importResult);
+    expect(loaded[0].importResult.messages[0]).toBe(loaded[0].importResult.files[0].messages[0]);
+    expect(store.listReportImports('another-report')).toEqual([]);
+    expect(store.getDetectedCourierIdentities()[0]).toMatchObject({ rawIdentity: 'Curier WhatsApp', messageCount: 2 });
+  });
+
+  it('clears the previous session only after a verified backup and keeps restaurants, schedules, couriers, and aliases', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'whatsapp-counter-session-'));
+    tempDirectories.push(directory);
+    const store = new WorkspaceStore(directory);
+    await store.init();
+    const restaurant = await store.saveRestaurant({ name: 'Romana', schedule: { openingTime: '10:00', closingTime: '04:00', tariffPolicy: 'night_after_23' } });
+    const courier = await store.saveCourier({ name: 'Cosmin', aliases: ['Curier WhatsApp'] });
+    const report = await store.saveReport({ name: 'Temporar', fromIso: '2026-11-02T00:00:00Z', toIso: '2026-11-03T00:00:00Z' });
+    await store.saveReportImport({ reportId: report.id, role: 'restaurant', restaurantId: restaurant.id }, importData());
+    const original = await fs.readFile(path.join(directory, 'workspace.sqlite'));
+    const restarted = new WorkspaceStore(directory);
+    await restarted.init();
+    expect(restarted.getSnapshot().reports).toEqual([]);
+    expect(restarted.listReportImports()).toEqual([]);
+    expect(restarted.listRestaurants()).toEqual([restaurant]);
+    expect(restarted.listCouriers()).toEqual([courier]);
+    expect(restarted.getAliasMap()).toEqual({ 'Curier WhatsApp': 'Cosmin' });
+    expect(await fs.readFile(path.join(directory, 'workspace.previous-session.sqlite'))).toEqual(original);
+    expect(await fs.readFile(path.join(directory, 'workspace-before-temporary-mode.sqlite'))).toEqual(original);
+    await restarted.restoreFromFile(path.join(directory, 'workspace.previous-session.sqlite'));
+    expect(restarted.listReportImports()).toHaveLength(1);
+    expect(restarted.getReport(report.id)?.name).toBe('Temporar');
+  });
+
+  it('preserves reports when a verified startup backup cannot be created', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'whatsapp-counter-backup-'));
+    tempDirectories.push(directory);
+    const store = new WorkspaceStore(directory);
+    await store.init();
+    const report = await store.saveReport({ name: 'Pastreaza', fromIso: '2026-11-02T00:00:00Z', toIso: '2026-11-03T00:00:00Z' });
+    vi.spyOn(fs, 'copyFile').mockRejectedValueOnce(Object.assign(new Error('Backup unavailable'), { code: 'EACCES' }));
+    const restarted = new WorkspaceStore(directory);
+    await restarted.init();
+    expect(restarted.getReport(report.id)?.name).toBe('Pastreaza');
+    expect(restarted.getSnapshot().maintenanceNotices.length).toBeGreaterThan(0);
+  });
+
+  it('reclaims large unused pages without changing persistent courier or restaurant data', async () => {
+    const store = await createStore();
+    const restaurant = await store.saveRestaurant({ name: 'Restaurant permanent' });
+    const courier = await store.saveCourier({ name: 'Curier permanent', aliases: ['Alias permanent'] });
+    const report = await store.saveReport({ name: 'Temporar mare', fromIso: '2026-11-02T00:00:00Z', toIso: '2026-11-03T00:00:00Z' });
+    const data = { importedAtIso: '', files: [], messages: [], availabilityMessages: [], issues: [], padding: 'x'.repeat(10 * 1024 * 1024) };
+    await store.saveReportImport({ reportId: report.id, role: 'restaurant', restaurantId: restaurant.id }, data);
+    await store.deleteReport(report.id);
+    const directory = tempDirectories[tempDirectories.length - 1];
+    expect((await fs.stat(path.join(directory, 'workspace.sqlite'))).size).toBeLessThan(1024 * 1024);
+    expect(store.listRestaurants()).toEqual([restaurant]);
+    expect(store.listCouriers()).toEqual([courier]);
+  });
+
+  it('does not rotate away the valid session backup when the initial archive is truncated', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'whatsapp-counter-archive-'));
+    tempDirectories.push(directory);
+    const store = new WorkspaceStore(directory);
+    await store.init();
+    const report = await store.saveReport({ name: 'Pastreaza arhiva', fromIso: '2026-11-02T00:00:00Z', toIso: '2026-11-03T00:00:00Z' });
+    const original = await fs.readFile(path.join(directory, 'workspace.sqlite'));
+    await fs.writeFile(path.join(directory, 'workspace.previous-session.sqlite'), original);
+    await fs.writeFile(path.join(directory, 'workspace-before-temporary-mode.sqlite'), 'truncated');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const restarted = new WorkspaceStore(directory);
+      await restarted.init();
+      expect(restarted.getReport(report.id)).not.toBeNull();
+      expect(await fs.readFile(path.join(directory, 'workspace.previous-session.sqlite'))).toEqual(original);
+    }
+  });
 });
 
 async function createStore(): Promise<WorkspaceStore> {

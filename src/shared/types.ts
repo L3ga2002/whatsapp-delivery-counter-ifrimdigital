@@ -170,6 +170,9 @@ export type AliasMap = Record<string, string>;
 export interface DeliveryCounterApi {
   importFromDialog: () => Promise<ImportResult | null>;
   getWorkspace: () => Promise<WorkspaceSnapshot>;
+  getReportImports: (reportId: string) => Promise<ReportImport[]>;
+  getReviewContext: (reportId: string, row: ReviewRow) => Promise<ReportImport[]>;
+  getDetectedCourierIdentities: () => Promise<import('./courier-identities').DetectedCourierIdentity[]>;
   backupWorkspace: () => Promise<string | null>;
   restoreWorkspace: () => Promise<WorkspaceSnapshot | null>;
   saveSettings: (settings: AppSettings) => Promise<WorkspaceSnapshot>;
@@ -179,7 +182,7 @@ export interface DeliveryCounterApi {
   deleteCourier: (courierId: string) => Promise<void>;
   saveReport: (input: ReportInput) => Promise<Report>;
   deleteReport: (reportId: string) => Promise<WorkspaceSnapshot>;
-  importToReport: (input: ReportImportInput) => Promise<ReportImport | null>;
+  importToReport: (input: ReportImportInput) => Promise<ReportImportSummary | null>;
   deleteReportImport: (importId: string) => Promise<WorkspaceSnapshot>;
   deleteAllReportImports: () => Promise<WorkspaceSnapshot>;
   deleteOldReportImports: (retentionDays: number) => Promise<WorkspaceSnapshot>;
@@ -278,7 +281,7 @@ export interface ReportInput {
   scanOptions?: ScanOptions;
 }
 
-export interface ReportImport {
+export interface ReportImportSummary {
   id: string;
   reportId: string;
   role: ReportImportRole;
@@ -289,7 +292,16 @@ export interface ReportImport {
   messageCount: number;
   availabilityMessageCount: number;
   issueCount: number;
+  fromIso?: string | null;
+  toIso?: string | null;
+}
+
+export interface ReportImport extends ReportImportSummary {
   importResult: ImportResult;
+}
+
+export interface StoredReportImport extends ReportImportSummary {
+  importResultJson: string;
 }
 
 export interface ReportImportInput {
@@ -304,6 +316,7 @@ export interface AppSettings {
   maxWorkSessionHours: number;
   defaultExportScope: ExportScope;
   importRetentionDays: number;
+  clearReportsOnStartup?: boolean;
   payroll: PayrollSettings;
 }
 
@@ -347,7 +360,7 @@ export interface WorkspaceSnapshot {
   restaurants: Restaurant[];
   couriers: Courier[];
   reports: Report[];
-  reportImports: ReportImport[];
+  reportImports: ReportImportSummary[];
   settings: AppSettings;
   maintenanceNotices: string[];
   parserVersion: ParserVersion;

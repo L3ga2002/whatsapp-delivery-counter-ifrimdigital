@@ -1,5 +1,17 @@
 # Changelog - WhatsApp Delivery Counter
 
+## 2026-11-09 - v0.3.24
+
+- Workspace and report loading now return import metadata/date bounds only; bounded source conversation context is loaded on demand when a message is opened.
+- Import and scan parsing runs in a bounded worker that is released after each operation.
+- Stored imports no longer serialize duplicate root/file message arrays; legacy imports remain readable.
+- Source metric lists are calculated only while their popover is open.
+- Fixed source drill-down in balanced reports with zero Review errors.
+- Source context uses stable import ids after restaurant renames and a bounded latest-selection queue for rapid navigation.
+- Reconstructed retained exports with real line breaks and preserved physical blank-line offsets for reliable reparsing and source anchors.
+- Added verified, reversible startup cleanup for temporary reports and conversations, preserving restaurants, schedules, couriers, aliases, and exported files. The first pre-update archive and a verified previous-session SQLite backup are retained.
+- Reclaim large unused SQLite pages and prevent concurrent app instances from opening the same workspace.
+
 ## 2026-08-17 - v0.3.23
 
 - Added additive parser support for plural zone wording such as `Ridicat x1 zone 2`, `Livrat x1 zone 2`, and mixed allocations such as `1 x zone 2`.

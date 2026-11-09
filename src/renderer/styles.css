@@ -599,7 +599,7 @@ button {
   font-weight: 700;
 }
 
-.retention-controls input {
+.retention-controls input[type="number"] {
   width: 86px;
 }
 

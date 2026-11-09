@@ -5,14 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { autoUpdater } from 'electron-updater';
-import {
-  applyRestaurantScheduleContext,
-  buildScanReport,
-  filterMessagesForRestaurantSchedule,
-  parseImportedTexts,
-  parseWhatsAppExport,
-} from '../src/shared/parser';
 import { WorkspaceStore } from './workspace-store';
+import { runParserTask, stopParserTasks } from './parser-runner';
 import type {
   AliasMap,
   AppSettings,
@@ -21,26 +15,37 @@ import type {
   Courier,
   CourierInput,
   ImportResult,
-  ParsedAvailabilityMessage,
-  ParsedDeliveryMessage,
   Report,
   ReportImport,
   ReportImportInput,
+  ReportImportSummary,
   ReportInput,
   Restaurant,
   RestaurantInput,
   ScanOptions,
   ScanReport,
+  ReviewRow,
   WorkspaceSnapshot,
 } from '../src/shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let importInProgress = false;
+let reportScanInProgress = false;
 let workspaceStore: WorkspaceStore | null = null;
 let updateStatus: AppUpdateStatus = createUpdateStatus('idle');
 let focusRecoveryInProgress = false;
 let needsFocusFix = false;
 let triggeringProgrammaticBlur = false;
+
+const isolatedUserData = process.env.WHATSAPP_COUNTER_USER_DATA_DIR;
+if (isolatedUserData && path.isAbsolute(isolatedUserData)) app.setPath('userData', isolatedUserData);
+const ownsWorkspace = app.requestSingleInstanceLock();
+if (!ownsWorkspace) app.quit();
+app.on('second-instance', () => {
+  if (mainWindow?.isMinimized()) mainWindow.restore();
+  mainWindow?.focus();
+});
+app.on('before-quit', stopParserTasks);
 
 const aliasFileName = 'courier-aliases.json';
 const updateOwner = 'L3ga2002';
@@ -134,7 +139,7 @@ function restoreWindowInputFocus(window: BrowserWindow | null): void {
   }, 75);
 }
 
-app.whenReady().then(async () => {
+if (ownsWorkspace) app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   workspaceStore = new WorkspaceStore(app.getPath('userData'));
   await workspaceStore.init();
@@ -169,6 +174,10 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+}).catch((error) => {
+  console.error('[startup] Workspace initialization failed.', error);
+  dialog.showErrorBox('Nu am putut porni aplicatia', error instanceof Error ? error.message : 'Workspace-ul local nu a putut fi incarcat.');
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
@@ -217,6 +226,20 @@ function registerIpcHandlers(): void {
   });
 
   handleTrusted('workspace:get', async (): Promise<WorkspaceSnapshot> => getStore().getSnapshot());
+  handleTrusted('reports:getImports', async (_event, reportId: string): Promise<ReportImport[]> => {
+    if (typeof reportId !== 'string' || reportId.length > 200) throw new Error('Raport invalid.');
+    return getStore().listReportImports(reportId);
+  });
+  handleTrusted('couriers:getDetectedIdentities', async () => getStore().getDetectedCourierIdentities());
+  handleTrusted('reports:getReviewContext', async (_event, reportId: string, row: ReviewRow): Promise<ReportImport[]> => {
+    if (typeof reportId !== 'string' || reportId.length > 200 || !row || typeof row.kind !== 'string') throw new Error('Context invalid.');
+    const store = getStore();
+    const anchors = row.kind === 'metric-source' ? row.sourceAnchors ?? [] : [];
+    const importIds = anchors.length && anchors.every((anchor) => anchor.reportImportId)
+      ? Array.from(new Set(anchors.map((anchor) => anchor.reportImportId!))) : undefined;
+    const imports = store.listStoredReportImports(reportId, importIds);
+    return runParserTask({ kind: 'context', imports, row });
+  });
 
   handleTrusted('workspace:backup', async (): Promise<string | null> => {
     const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -318,7 +341,7 @@ function registerIpcHandlers(): void {
     return getStore().getSnapshot();
   });
 
-  handleTrusted('reports:import', async (_event, input: ReportImportInput): Promise<ReportImport | null> => {
+  handleTrusted('reports:import', async (_event, input: ReportImportInput): Promise<ReportImportSummary | null> => {
     if (importInProgress) {
       throw new Error('Un import este deja in lucru. Asteapta finalizarea lui.');
     }
@@ -350,7 +373,8 @@ function registerIpcHandlers(): void {
     importInProgress = true;
     try {
       const importResult = await importFilePaths(result.filePaths);
-      return await getStore().saveReportImport(input, importResult);
+      const { importResult: _result, ...summary } = await getStore().saveReportImport(input, importResult);
+      return summary;
     } finally {
       importInProgress = false;
     }
@@ -378,20 +402,21 @@ function registerIpcHandlers(): void {
       throw new Error('Raportul selectat nu exista.');
     }
 
-    const { messages, availabilityMessages } = materializeReportInputs(
-      store.listReportImports(reportId),
-      store.getSnapshot().restaurants,
-      options,
-    );
-    const scanReport = buildScanReport(
-      messages,
-      { fromIso: report.fromIso, toIso: report.toIso },
-      store.getAliasMap(),
-      availabilityMessages,
-      options,
-    );
-    await store.markReportScanned(reportId, scanReport.options);
-    return scanReport;
+    reportScanInProgress = true;
+    try {
+      const scanReport = await runParserTask({
+        kind: 'scan',
+        imports: store.listStoredReportImports(reportId),
+        restaurants: store.listRestaurants(),
+        interval: { fromIso: report.fromIso, toIso: report.toIso },
+        aliases: store.getAliasMap(),
+        options,
+      });
+      await store.markReportScanned(reportId, scanReport.options);
+      return scanReport;
+    } finally {
+      reportScanInProgress = false;
+    }
   });
 
   handleTrusted('aliases:get', async (): Promise<AliasMap> => getStore().getAliasMap());
@@ -410,6 +435,12 @@ function handleTrusted<Args extends unknown[], Result>(
 ): void {
   ipcMain.handle(channel, async (event, ...args: Args) => {
     assertTrustedSender(event);
+    if (reportScanInProgress && ![
+      'workspace:get', 'reports:getImports', 'reports:getReviewContext', 'couriers:getDetectedIdentities', 'aliases:get',
+      'updates:getStatus', 'updates:check', 'updates:download',
+    ].includes(channel)) {
+      throw new Error('Scanarea este inca in lucru. Asteapta finalizarea ei inainte de a modifica datele.');
+    }
     return handler(event, ...args);
   });
 }
@@ -482,7 +513,7 @@ async function importFilePaths(filePaths: string[]): Promise<ImportResult> {
   }
 
   console.info(`[import] Parsed ${texts.length} text source(s) from selected file(s).`);
-  return parseImportedTexts(texts);
+  return runParserTask({ kind: 'import', texts });
 }
 
 async function readSourceTextsFromFile(filePath: string): Promise<SourceText[]> {
@@ -603,96 +634,6 @@ function getStore(): WorkspaceStore {
     throw new Error('Workspace-ul local nu este initializat.');
   }
   return workspaceStore;
-}
-
-function materializeReportInputs(
-  imports: ReportImport[],
-  restaurants: Restaurant[],
-  options: ScanOptions,
-): {
-  messages: ParsedDeliveryMessage[];
-  availabilityMessages: ParsedAvailabilityMessage[];
-} {
-  const selectedRestaurantIds =
-    options.includeAllRestaurants === false ? new Set(options.restaurantIds ?? []) : null;
-  const messages: ParsedDeliveryMessage[] = [];
-  const availabilityMessages: ParsedAvailabilityMessage[] = [];
-
-  for (const reportImport of imports) {
-    const restaurant = reportImport.restaurantId
-      ? restaurants.find((item) => item.id === reportImport.restaurantId)
-      : null;
-    const restaurantAllowed =
-      !selectedRestaurantIds ||
-      (reportImport.restaurantId ? selectedRestaurantIds.has(reportImport.restaurantId) : false);
-    const displayName = restaurant?.name ?? reportImport.sourceLabel;
-
-    if ((reportImport.role === 'restaurant' || reportImport.role === 'mixed') && restaurantAllowed) {
-      const files = reportImport.importResult.files?.length
-        ? reportImport.importResult.files
-        : [{ messages: reportImport.importResult.messages, conversationLines: [] }];
-      for (const file of files) {
-        // Existing local imports may have been parsed by an older rule set. Rebuild
-        // from the retained WhatsApp lines so a rescan always uses the current parser.
-        const hasRetainedConversation = 'sourceFile' in file && file.conversationLines.length > 0;
-        const reparsedFile = hasRetainedConversation
-          ? parseWhatsAppExport(
-            file.conversationLines.map((line) => line.rawLine).join('\n'),
-            file.sourceFile,
-            file.bytes,
-            file.restaurantName,
-          )
-          : file;
-        // A legacy import without retained source lines cannot be safely recalculated
-        // using the current parser. Keep it visible in Review, but do not let its old
-        // paid classifications affect a new scan. Re-importing the WhatsApp export is
-        // the explicit, lossless recovery path.
-        const sourceMessages = hasRetainedConversation
-          ? reparsedFile.messages
-          : reparsedFile.messages.map((message) => ({
-            ...message,
-            autoCountable: false,
-            needsReview: true,
-            reviewReasons: Array.from(new Set([
-              ...message.reviewReasons,
-              'Import vechi fara liniile conversatiei: reimporta fisierul pentru recalculare sigura.',
-            ])),
-          }));
-        const scheduledMessages = filterMessagesForRestaurantSchedule(
-          applyRestaurantScheduleContext(
-            sourceMessages,
-            reparsedFile.conversationLines,
-            restaurant?.schedule,
-          ),
-          restaurant?.schedule,
-        );
-        messages.push(
-          ...scheduledMessages.map((message) => ({
-            ...message,
-            reportImportId: reportImport.id,
-            restaurantId: reportImport.restaurantId ?? undefined,
-            restaurantName: displayName,
-          })),
-        );
-      }
-    }
-
-    if (reportImport.role === 'workHours' || reportImport.role === 'mixed') {
-      const files = reportImport.importResult.files?.length
-        ? reportImport.importResult.files
-        : [{ availabilityMessages: reportImport.importResult.availabilityMessages }];
-      availabilityMessages.push(
-        ...files.flatMap((file) =>
-          file.availabilityMessages.map((message) => ({
-            ...message,
-            restaurantName: displayName,
-          })),
-        ),
-      );
-    }
-  }
-
-  return { messages, availabilityMessages };
 }
 
 function aliasFilePath(): string {

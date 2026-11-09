@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
+import { constants, createReadStream } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js';
 import { normalizeCourierIdentity } from '../src/shared/parser';
+import { collectDetectedCourierIdentities } from '../src/shared/courier-identities';
+import { deserializeImportResult, hydrateReportImport, serializeImportResult } from '../src/shared/import-storage';
 import { defaultPayrollSettings, mergePayrollSettings } from '../src/shared/payroll';
 import {
   PARSER_VERSION,
@@ -14,6 +17,8 @@ import {
   type Report,
   type ReportImport,
   type ReportImportInput,
+  type ReportImportSummary,
+  type StoredReportImport,
   type ReportInput,
   type Restaurant,
   type RestaurantInput,
@@ -37,6 +42,7 @@ const defaultSettings: AppSettings = {
   maxWorkSessionHours: 18,
   defaultExportScope: 'full',
   importRetentionDays: 30,
+  clearReportsOnStartup: true,
   payroll: defaultPayrollSettings,
 };
 
@@ -88,6 +94,7 @@ export class WorkspaceStore {
     }
 
     this.migrate();
+    await this.clearPreviousSessionReports();
     await this.save();
   }
 
@@ -98,7 +105,7 @@ export class WorkspaceStore {
       restaurants: this.listRestaurants(),
       couriers: this.listCouriers(),
       reports: this.listReports(),
-      reportImports: this.listReportImports(),
+      reportImports: this.listReportImportSummaries(),
       settings,
       maintenanceNotices: this.getSetting<string[]>('maintenanceNotices', []),
       parserVersion: {
@@ -168,6 +175,7 @@ export class WorkspaceStore {
       maxWorkSessionHours: clampInteger(input.maxWorkSessionHours, 1, 24, defaultSettings.maxWorkSessionHours),
       defaultExportScope: input.defaultExportScope ?? defaultSettings.defaultExportScope,
       importRetentionDays: clampInteger(input.importRetentionDays, 1, 365, defaultSettings.importRetentionDays),
+      clearReportsOnStartup: input.clearReportsOnStartup !== false,
       payroll: sanitizePayrollSettings(input.payroll),
     };
     this.setSetting('settings', settings);
@@ -420,6 +428,13 @@ export class WorkspaceStore {
     }
 
     const importedAtIso = new Date().toISOString();
+    let firstTimestamp = Number.POSITIVE_INFINITY;
+    let lastTimestamp = Number.NEGATIVE_INFINITY;
+    for (const message of [...importResult.messages, ...importResult.availabilityMessages]) {
+      if (!Number.isFinite(message.timestampMs)) continue;
+      firstTimestamp = Math.min(firstTimestamp, message.timestampMs);
+      lastTimestamp = Math.max(lastTimestamp, message.timestampMs);
+    }
     const reportImport: ReportImport = {
       id: randomUUID(),
       reportId: input.reportId,
@@ -431,13 +446,15 @@ export class WorkspaceStore {
       messageCount: importResult.messages.length,
       availabilityMessageCount: importResult.availabilityMessages.length,
       issueCount: importResult.issues.length,
+      fromIso: Number.isFinite(firstTimestamp) ? new Date(firstTimestamp).toISOString() : null,
+      toIso: Number.isFinite(lastTimestamp) ? new Date(lastTimestamp).toISOString() : null,
       importResult,
     };
 
     this.run(
       `insert into report_imports
-        (id, report_id, role, restaurant_id, source_label, imported_at_iso, file_count, message_count, availability_count, issue_count, import_result_json)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, report_id, role, restaurant_id, source_label, imported_at_iso, file_count, message_count, availability_count, issue_count, import_result_json, from_iso, to_iso)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         reportImport.id,
         reportImport.reportId,
@@ -449,7 +466,9 @@ export class WorkspaceStore {
         reportImport.messageCount,
         reportImport.availabilityMessageCount,
         reportImport.issueCount,
-        JSON.stringify(reportImport.importResult),
+        serializeImportResult(reportImport.importResult),
+        reportImport.fromIso ?? null,
+        reportImport.toIso ?? null,
       ],
     );
     await this.save();
@@ -497,14 +516,40 @@ export class WorkspaceStore {
   }
 
   listReportImports(reportId?: string): ReportImport[] {
-    if (reportId) {
-      return this.queryAll(
-        'select * from report_imports where report_id = ? order by imported_at_iso desc',
-        [reportId],
-        rowToReportImport,
-      );
+    return this.listStoredReportImports(reportId).map(hydrateReportImport);
+  }
+
+  listReportImportSummaries(): ReportImportSummary[] {
+    return this.queryAll(
+      `select id, report_id, role, restaurant_id, source_label, imported_at_iso,
+       file_count, message_count, availability_count, issue_count, from_iso, to_iso from report_imports order by imported_at_iso desc`,
+      [], rowToReportImportSummary,
+    );
+  }
+
+  listStoredReportImports(reportId?: string, importIds?: string[]): StoredReportImport[] {
+    if (importIds?.length === 0) return [];
+    const conditions = [reportId ? 'report_id = ?' : '', importIds ? `id in (${importIds.map(() => '?').join(',')})` : ''].filter(Boolean);
+    return this.queryAll(
+      `select * from report_imports ${conditions.length ? `where ${conditions.join(' and ')}` : ''} order by imported_at_iso desc`,
+      [...(reportId ? [reportId] : []), ...(importIds ?? [])],
+      (row) => ({ ...rowToReportImportSummary(row), importResultJson: String(row.import_result_json) }),
+    );
+  }
+
+  getDetectedCourierIdentities(): ReturnType<typeof collectDetectedCourierIdentities> {
+    const db = this.requireDb();
+    function* results(): Generator<Pick<ReportImport, 'importResult'>> {
+      const statement = db.prepare('select import_result_json from report_imports');
+      try {
+        while (statement.step()) {
+          yield { importResult: deserializeImportResult(String(statement.getAsObject().import_result_json)) };
+        }
+      } finally {
+        statement.free();
+      }
     }
-    return this.queryAll('select * from report_imports order by imported_at_iso desc', [], rowToReportImport);
+    return collectDetectedCourierIdentities(results(), this.listCouriers());
   }
 
   getAliasMap(): AliasMap {
@@ -660,9 +705,12 @@ export class WorkspaceStore {
     if (!this.getSetting<AppSettings | null>('settings', null)) {
       this.setSetting('settings', defaultSettings);
     }
+    this.run('create index if not exists report_imports_report_id on report_imports(report_id)');
+    this.ensureColumn('report_imports', 'from_iso', 'text');
+    this.ensureColumn('report_imports', 'to_iso', 'text');
   }
 
-  private ensureColumn(table: 'restaurants', column: 'schedule_json', definition: string): void {
+  private ensureColumn(table: 'restaurants' | 'report_imports', column: 'schedule_json' | 'from_iso' | 'to_iso', definition: string): void {
     const columns = this.queryAll<{ name: string }, string>(
       `pragma table_info(${table})`,
       [],
@@ -736,6 +784,42 @@ export class WorkspaceStore {
     return path.join(this.userDataPath, workspaceDbFileName);
   }
 
+  private async clearPreviousSessionReports(): Promise<void> {
+    if (!this.getSettings().clearReportsOnStartup) return;
+    const reportCount = this.listReports().length;
+    const importCount = this.listReportImportSummaries().length;
+    if (!reportCount && !importCount) return;
+
+    // The startup reset is reversible: preserve the first pre-update archive,
+    // and verify a fresh previous-session backup before touching any records.
+    const source = this.dbPath();
+    const archive = path.join(this.userDataPath, 'workspace-before-temporary-mode.sqlite');
+    const backup = path.join(this.userDataPath, 'workspace.previous-session.sqlite');
+    const temporaryBackup = `${backup}.tmp`;
+    try {
+      const originalHash = await hashFile(source);
+      await ensureVerifiedArchive(source, archive, originalHash);
+      await fs.copyFile(source, temporaryBackup);
+      if (await hashFile(temporaryBackup) !== originalHash) throw new Error('Verificarea copiei de siguranta a esuat.');
+      await fs.rename(temporaryBackup, backup);
+    } catch (error) {
+      console.warn('[workspace] Session cleanup skipped: verified backup unavailable.', error);
+      this.setSetting('maintenanceNotices', ['Curatarea rapoartelor a fost amanata: copia de siguranta nu a putut fi verificata. Datele au fost pastrate.']);
+      return;
+    }
+
+    this.run('begin transaction');
+    try {
+      this.run('delete from report_imports');
+      this.run('delete from reports');
+      this.run('commit');
+    } catch (error) {
+      this.run('rollback');
+      throw error;
+    }
+    console.info(`[workspace] Cleared ${reportCount} previous-session report(s), ${importCount} import(s); verified backup retained.`);
+  }
+
   private async backupBrokenDb(): Promise<string> {
     const sourcePath = this.dbPath();
     const backupPath = path.join(
@@ -794,6 +878,14 @@ export class WorkspaceStore {
 
   private async persist(): Promise<void> {
     const db = this.requireDb();
+    const pageSize = Number(db.exec('pragma page_size')[0]?.values[0]?.[0] ?? 4096);
+    const freePages = Number(db.exec('pragma freelist_count')[0]?.values[0]?.[0] ?? 0);
+    const totalPages = Number(db.exec('pragma page_count')[0]?.values[0]?.[0] ?? 0);
+    if (freePages * pageSize >= 8 * 1024 * 1024 && freePages > totalPages / 4) {
+      // The on-disk original is still intact and is copied to last-good below.
+      db.run('vacuum');
+      console.info(`[workspace] Reclaimed ${Math.round(freePages * pageSize / 1048576)} MiB of unused database pages.`);
+    }
     const data = db.export();
     const dbPath = this.dbPath();
     const backupPath = path.join(this.userDataPath, 'workspace.last-good.sqlite');
@@ -823,6 +915,38 @@ export class WorkspaceStore {
     }
     return null;
   }
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function ensureVerifiedArchive(source: string, archive: string, sourceHash: string): Promise<void> {
+  const manifest = `${archive}.sha256`;
+  try {
+    await fs.access(archive);
+    let expected = '';
+    try { expected = (await fs.readFile(manifest, 'utf8')).trim(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    const actual = await hashFile(archive);
+    if (!expected && actual === sourceHash) {
+      await fs.writeFile(manifest, `${actual}\n`, { flag: 'wx' });
+      return;
+    }
+    if (!/^[a-f0-9]{64}$/.test(expected) || actual !== expected) throw new Error('Arhiva initiala nu a putut fi verificata.');
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const temporaryArchive = `${archive}.${randomUUID()}.tmp`;
+  await fs.copyFile(source, temporaryArchive, constants.COPYFILE_EXCL);
+  if (await hashFile(temporaryArchive) !== sourceHash) throw new Error('Arhiva initiala este incompleta.');
+  // A hard link publishes the verified copy atomically and cannot replace an archive.
+  await fs.link(temporaryArchive, archive);
+  await fs.unlink(temporaryArchive);
+  await fs.writeFile(manifest, `${sourceHash}\n`, { flag: 'wx' });
 }
 
 function importFingerprint(
@@ -892,7 +1016,7 @@ function rowToReport(row: Record<string, unknown>): Report {
   };
 }
 
-function rowToReportImport(row: Record<string, unknown>): ReportImport {
+function rowToReportImportSummary(row: Record<string, unknown>): ReportImportSummary {
   const role = String(row.role);
   return {
     id: String(row.id),
@@ -905,7 +1029,8 @@ function rowToReportImport(row: Record<string, unknown>): ReportImport {
     messageCount: Number(row.message_count),
     availabilityMessageCount: Number(row.availability_count),
     issueCount: Number(row.issue_count),
-    importResult: JSON.parse(String(row.import_result_json)) as ReportImport['importResult'],
+    fromIso: row.from_iso ? String(row.from_iso) : null,
+    toIso: row.to_iso ? String(row.to_iso) : null,
   };
 }
 

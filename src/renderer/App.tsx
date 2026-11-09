@@ -30,6 +30,7 @@ import type {
   AppUpdateStatus,
   Report,
   ReportImport,
+  ReportImportSummary,
   ReportImportRole,
   Restaurant,
   RestaurantInput,
@@ -43,7 +44,7 @@ import type {
   ScanReport,
   WorkspaceSnapshot,
 } from '../shared/types';
-import { collectDetectedCourierIdentities } from '../shared/courier-identities';
+import type { DetectedCourierIdentity } from '../shared/courier-identities';
 import {
   buildPayrollResult,
   fromBani,
@@ -98,6 +99,7 @@ type SourceContextTarget = {
 export default function App(): JSX.Element {
   const desktopApi = window.deliveryCounter;
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
+  const [detectedIdentities, setDetectedIdentities] = useState<DetectedCourierIdentity[]>([]);
   const [activeView, setActiveView] = useState<ViewId>('dashboard');
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [report, setReport] = useState<ScanReport | null>(null);
@@ -114,8 +116,17 @@ export default function App(): JSX.Element {
   const selectedReport = workspace?.reports.find((item) => item.id === selectedReportId) ?? null;
   const selectedReportImports = useMemo(
     () => workspace?.reportImports.filter((item) => item.reportId === selectedReportId) ?? [],
-    [selectedReportId, workspace],
+    [selectedReportId, workspace?.reportImports],
   );
+
+  useEffect(() => {
+    if (!desktopApi || activeView !== 'couriers') return;
+    let cancelled = false;
+    void withTimeout(desktopApi.getDetectedCourierIdentities(), 60_000, 'Identitatile WhatsApp nu au raspuns la timp.')
+      .then((identities) => { if (!cancelled) setDetectedIdentities(identities); })
+      .catch((error) => { if (!cancelled) setNotice({ kind: 'error', text: getErrorMessage(error, 'Nu am putut incarca identitatile WhatsApp.') }); });
+    return () => { cancelled = true; };
+  }, [desktopApi, activeView, workspace?.reportImports, workspace?.couriers]);
 
   useEffect(() => {
     void reloadWorkspace();
@@ -436,7 +447,7 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleDeleteReportImport = async (importItem: ReportImport): Promise<void> => {
+  const handleDeleteReportImport = async (importItem: ReportImportSummary): Promise<void> => {
     if (!desktopApi || isBusy) {
       return;
     }
@@ -764,7 +775,7 @@ export default function App(): JSX.Element {
         {activeView === 'couriers' ? (
           <CouriersView
             couriers={workspace.couriers}
-            reportImports={workspace.reportImports}
+            detectedIdentities={detectedIdentities}
             onSave={handleSaveCourier}
             onDelete={handleDeleteCourier}
             onConfirmDiscard={requestConfirmation}
@@ -776,6 +787,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             selectedReportId={selectedReportId}
             onSelectReport={(nextId) => {
+              if (isBusy) return;
               setSelectedReportId(nextId);
               setReport(null);
               const nextReport = workspace.reports.find((item) => item.id === nextId);
@@ -1096,14 +1108,14 @@ function RestaurantsView({
 
 function CouriersView({
   couriers,
-  reportImports,
+  detectedIdentities,
   onSave,
   onDelete,
   onConfirmDiscard,
   isBusy,
 }: {
   couriers: Courier[];
-  reportImports: ReportImport[];
+  detectedIdentities: DetectedCourierIdentity[];
   onSave: (input: CourierInput) => Promise<boolean>;
   onDelete: (courierId: string) => Promise<void>;
   onConfirmDiscard: (request: ConfirmationRequest) => Promise<boolean>;
@@ -1116,10 +1128,6 @@ function CouriersView({
   const [targetCourierId, setTargetCourierId] = useState('');
   const isEditing = Boolean(draft.id);
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
-  const detectedIdentities = useMemo(
-    () => collectDetectedCourierIdentities(reportImports, couriers),
-    [couriers, reportImports],
-  );
   const unassignedIdentities = detectedIdentities.filter((identity) => !identity.mappedCourierId);
   const activeCouriers = couriers.filter((courier) => courier.isActive);
 
@@ -1378,7 +1386,7 @@ function ReportsView({
   selectedReportId: string;
   onSelectReport: (reportId: string) => void;
   selectedReport: Report | null;
-  selectedReportImports: ReportImport[];
+  selectedReportImports: ReportImportSummary[];
   report: ScanReport | null;
   scanOptions: ScanOptions;
   setScanOptions: (options: ScanOptions) => void;
@@ -1390,7 +1398,7 @@ function ReportsView({
   onDeleteReport: (report: Report) => Promise<void>;
   onCreateRestaurant: (input: RestaurantInput) => Promise<Restaurant | null>;
   onImport: (role: ReportImportRole, restaurantId: string) => Promise<void>;
-  onDeleteImport: (importItem: ReportImport) => Promise<void>;
+  onDeleteImport: (importItem: ReportImportSummary) => Promise<void>;
   onScan: () => Promise<void>;
   onExport: (options?: ExportOptions) => Promise<void>;
   isBusy: boolean;
@@ -1523,6 +1531,7 @@ function ReportsView({
                   className="report-select-button"
                   type="button"
                   onClick={() => onSelectReport(item.id)}
+                  disabled={isBusy}
                 >
                   <strong>{item.name}</strong>
                   <span>{formatDateTime(item.fromIso)} - {formatDateTime(item.toIso)}</span>
@@ -2092,6 +2101,15 @@ function SettingsView({
           </div>
         </div>
         <div className="retention-controls">
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={workspace.settings.clearReportsOnStartup !== false}
+              onChange={(event) => void onSaveSettings({ ...workspace.settings, clearReportsOnStartup: event.target.checked })}
+              disabled={isBusy}
+            />
+            Sterge rapoartele si conversatiile la urmatoarea pornire
+          </label>
           <label>
             Pastreaza importurile
             <input
@@ -2294,9 +2312,9 @@ function ImportList({
   onDelete,
   disabled,
 }: {
-  imports: ReportImport[];
+  imports: ReportImportSummary[];
   restaurants: Restaurant[];
-  onDelete: (importItem: ReportImport) => Promise<void>;
+  onDelete: (importItem: ReportImportSummary) => Promise<void>;
   disabled: boolean;
 }): JSX.Element {
   if (!imports.length) {
@@ -2465,7 +2483,7 @@ function ReportResults({
   report: ScanReport;
   activeReviewRow: ReviewRow | null;
   setActiveReviewRow: (row: ReviewRow | null) => void;
-  imports: ReportImport[];
+  imports: ReportImportSummary[];
 }): JSX.Element {
   const [activeTab, setActiveTab] = useState<ResultTab>('couriers');
 
@@ -2560,25 +2578,28 @@ function ReportResults({
       ) : null}
 
       {activeTab === 'review' ? (
-      <section className="panel review-panel">
-        <div className="panel-heading">
-          <MapPin aria-hidden="true" />
-          <div>
-            <h2>Review</h2>
-            <p>Click pe eroare pentru contextul conversatiei.</p>
-          </div>
-        </div>
-        {report.reviewRows.length ? (
-          <>
-            <ReviewList rows={report.reviewRows} activeRowId={activeReviewRow?.id ?? null} onSelect={setActiveReviewRow} />
-            {activeReviewRow ? <ReviewContext row={activeReviewRow} imports={imports} onClose={() => setActiveReviewRow(null)} /> : null}
-          </>
-        ) : (
-          <EmptyState text="Nu exista randuri de review." />
-        )}
-      </section>
+        <ReviewPanel rows={report.reviewRows} activeRow={activeReviewRow} onSelect={setActiveReviewRow} imports={imports} />
       ) : null}
     </div>
+  );
+}
+
+export function ReviewPanel({ rows, activeRow, onSelect, imports }: {
+  rows: ReviewRow[];
+  activeRow: ReviewRow | null;
+  onSelect: (row: ReviewRow | null) => void;
+  imports: ReportImportSummary[];
+}): JSX.Element {
+  return (
+    <section className="panel review-panel">
+      <div className="panel-heading">
+        <MapPin aria-hidden="true" />
+        <div><h2>Review</h2><p>Click pe eroare pentru contextul conversatiei.</p></div>
+      </div>
+      {rows.length ? <ReviewList rows={rows} activeRowId={activeRow?.id ?? null} onSelect={onSelect} /> : null}
+      {activeRow ? <ReviewContext row={activeRow} imports={imports} onClose={() => onSelect(null)} /> : null}
+      {!rows.length && !activeRow ? <EmptyState text="Nu exista randuri de review." /> : null}
+    </section>
   );
 }
 
@@ -2665,7 +2686,10 @@ function MetricSourceButton({
   const controlRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<number | null>(null);
-  const sources = groupMetricSources(findMetricSources(report.metricSources, metric, filter));
+  const sources = useMemo(
+    () => isOpen && value !== 0 ? groupMetricSources(findMetricSources(report.metricSources, metric, filter)) : [],
+    [isOpen, value, report.metricSources, metric, filter.courierName, filter.restaurantName, filter.dayKey],
+  );
   const clearTimer = (): void => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = null;
@@ -2721,7 +2745,7 @@ function MetricSourceButton({
       window.removeEventListener('resize', closeOnViewportChange);
     };
   }, [isOpen]);
-  if (value === 0 || sources.length === 0) return <span>{formatter?.() ?? value}</span>;
+  if (value === 0) return <span>{formatter?.() ?? value}</span>;
   return (
     <span ref={controlRef} className="metric-source-control" onPointerEnter={scheduleOpen} onPointerLeave={scheduleClose}>
       <button ref={buttonRef} className="source-metric-button" type="button" aria-expanded={isOpen} onClick={() => { clearTimer(); isOpen ? closePopover() : openPopover(); }}>
@@ -3012,7 +3036,7 @@ function ReviewList({
   );
 }
 
-function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: ReportImport[]; onClose: () => void }): JSX.Element {
+function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: ReportImportSummary[]; onClose: () => void }): JSX.Element {
   const maxContextLinesPerSide = 120;
   const maxVisibleTargets = 160;
   const contextRef = useRef<HTMLDivElement>(null);
@@ -3020,9 +3044,29 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
   const [linesAfter, setLinesAfter] = useState(80);
   const [visibleTargets, setVisibleTargets] = useState(80);
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
+  const [loadedContext, setLoadedContext] = useState<{ rowId: string; imports: ReportImport[] } | null>(null);
+  const [isLoadingContext, setIsLoadingContext] = useState(true);
+  const [contextError, setContextError] = useState('');
+  const contextImports = loadedContext?.rowId === row.id ? loadedContext.imports : [];
+  const contextReportId = imports[0]?.reportId;
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingContext(true);
+    setContextError('');
+    if (!contextReportId || !window.deliveryCounter) {
+      setContextError('Conversatia nu este disponibila.');
+      setIsLoadingContext(false);
+      return;
+    }
+    void window.deliveryCounter.getReviewContext(contextReportId, row)
+      .then((result) => { if (!cancelled) setLoadedContext({ rowId: row.id, imports: result }); })
+      .catch((error) => { if (!cancelled) setContextError(getErrorMessage(error, 'Nu am putut incarca mesajul.')); })
+      .finally(() => { if (!cancelled) setIsLoadingContext(false); });
+    return () => { cancelled = true; };
+  }, [contextReportId, row]);
   const importedFiles = useMemo(
-    () => imports.flatMap((item) => (item.importResult.files ?? []).map((file) => ({ file, reportImportId: item.id }))),
-    [imports],
+    () => contextImports.flatMap((item) => (item.importResult.files ?? []).map((file) => ({ file, reportImportId: item.id }))),
+    [contextImports],
   );
   const lineIndexBySource = useMemo(() => {
     const index = new Map<string, number>();
@@ -3034,8 +3078,8 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
     return index;
   }, [importedFiles]);
   const sourceMessages = useMemo(
-    () => imports.flatMap((item) => item.importResult.messages.map((message) => ({ message, reportImportId: item.id }))),
-    [imports],
+    () => contextImports.flatMap((item) => item.importResult.messages.map((message) => ({ message, reportImportId: item.id }))),
+    [contextImports],
   );
   const targets = useMemo<SourceContextTarget[]>(() => {
     if (row.kind === 'metric-source' && row.sourceAnchors?.length) {
@@ -3091,7 +3135,7 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
   useEffect(() => {
     const target = contextRef.current?.querySelector<HTMLElement>('.context-line.target');
     target?.scrollIntoView({ block: 'center' });
-  }, [activeTarget?.id, row.id]);
+  }, [activeTarget?.id, row.id, loadedContext]);
 
   const contextFiles = useMemo(() => {
     if (!activeTarget) return [];
@@ -3123,6 +3167,8 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
         <button className="secondary-button compact" type="button" onClick={onClose}>Inchide contextul</button>
       </div>
       <p>Se afiseaza doar zona relevanta din conversatie pentru ca aplicatia sa ramana rapida. Mesajul ales este evidentiat.</p>
+      {isLoadingContext ? <p role="status">Incarc mesajele...</p> : null}
+      {contextError ? <p role="alert">{contextError}</p> : null}
       {targets.length > 1 ? (
         <div className="context-target-list" aria-label="Mesaje implicate in review">
           <strong>Mesaje implicate: {targets.length}</strong>
@@ -3166,7 +3212,7 @@ function ReviewContext({ row, imports, onClose }: { row: ReviewRow; imports: Rep
             file.hiddenAfter > 0 && linesAfter < maxContextLinesPerSide ? <button className="context-load-button" type="button" key={`${file.sourceId}-after`} onClick={() => setLinesAfter((current) => Math.min(maxContextLinesPerSide, current + 100))}>Arata inca {Math.min(maxContextLinesPerSide - linesAfter, file.hiddenAfter)} mesaje urmatoare</button> : null,
           ])}
         </div>
-      ) : (
+      ) : isLoadingContext ? null : (
         row.kind === 'mismatch' || row.kind === 'metric-source' ? (
           <EmptyState text="Nu am gasit conversatia sursa pentru aceasta neconcordanta. Reimporta fisierul restaurantului daca mesajele au fost sterse local." />
         ) : (
@@ -4393,7 +4439,7 @@ function getConversationWindow<T extends { lineNumber: number }>(lines: T[], lin
 
 function getReportStep(
   selectedReport: Report | null,
-  imports: ReportImport[],
+  imports: ReportImportSummary[],
   report: ScanReport | null,
   hasInvalidInterval: boolean,
 ): ReportStep {
@@ -4472,7 +4518,7 @@ function validateScanOptions(options: ScanOptions): string | null {
   return null;
 }
 
-function validateScanImports(options: ScanOptions, imports: ReportImport[]): string | null {
+function validateScanImports(options: ScanOptions, imports: ReportImportSummary[]): string | null {
   const selectedRestaurantIds =
     options.includeAllRestaurants === false ? new Set(options.restaurantIds ?? []) : null;
   const hasRestaurantImport = imports.some((item) => {
@@ -4495,22 +4541,26 @@ function validateScanImports(options: ScanOptions, imports: ReportImport[]): str
   return null;
 }
 
-export function getReportImportRange(imports: ReportImport[]): ImportRange | null {
+export function getReportImportRange(imports: ReportImportSummary[]): ImportRange | null {
   let fromMs = Number.POSITIVE_INFINITY;
   let toMs = Number.NEGATIVE_INFINITY;
   let deliveryCount = 0;
   let availabilityCount = 0;
 
   for (const item of imports) {
-    deliveryCount += item.importResult.messages.length;
-    availabilityCount += item.importResult.availabilityMessages.length;
-    for (const message of item.importResult.messages) {
+    const imported = (item as Partial<ReportImport>).importResult;
+    deliveryCount += imported?.messages.length ?? item.messageCount;
+    availabilityCount += imported?.availabilityMessages.length ?? item.availabilityMessageCount;
+    for (const timestamp of [Date.parse(item.fromIso ?? ''), Date.parse(item.toIso ?? '')]) {
+      if (Number.isFinite(timestamp)) { fromMs = Math.min(fromMs, timestamp); toMs = Math.max(toMs, timestamp); }
+    }
+    for (const message of imported?.messages ?? []) {
       if (Number.isFinite(message.timestampMs)) {
         fromMs = Math.min(fromMs, message.timestampMs);
         toMs = Math.max(toMs, message.timestampMs);
       }
     }
-    for (const message of item.importResult.availabilityMessages) {
+    for (const message of imported?.availabilityMessages ?? []) {
       if (Number.isFinite(message.timestampMs)) {
         fromMs = Math.min(fromMs, message.timestampMs);
         toMs = Math.max(toMs, message.timestampMs);

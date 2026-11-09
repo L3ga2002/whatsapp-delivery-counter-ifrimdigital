@@ -10,7 +10,7 @@ export interface DetectedCourierIdentity {
 }
 
 export function collectDetectedCourierIdentities(
-  imports: ReportImport[],
+  imports: Iterable<Pick<ReportImport, 'importResult'>>,
   couriers: Courier[],
 ): DetectedCourierIdentity[] {
   const owners = new Map<string, Courier>();

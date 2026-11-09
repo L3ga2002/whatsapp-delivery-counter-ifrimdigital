@@ -8,6 +8,8 @@ import type {
   Report,
   ReportImport,
   ReportImportInput,
+  ReportImportSummary,
+  ReviewRow,
   ReportInput,
   Restaurant,
   RestaurantInput,
@@ -21,6 +23,9 @@ import type {
 const api: DeliveryCounterApi = {
   importFromDialog: (): Promise<ImportResult | null> => ipcRenderer.invoke('chat:importFromDialog'),
   getWorkspace: (): Promise<WorkspaceSnapshot> => ipcRenderer.invoke('workspace:get'),
+  getReportImports: (reportId: string): Promise<ReportImport[]> => ipcRenderer.invoke('reports:getImports', reportId),
+  getReviewContext: (reportId: string, row: ReviewRow): Promise<ReportImport[]> => ipcRenderer.invoke('reports:getReviewContext', reportId, row),
+  getDetectedCourierIdentities: () => ipcRenderer.invoke('couriers:getDetectedIdentities'),
   backupWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:backup'),
   restoreWorkspace: (): Promise<WorkspaceSnapshot | null> => ipcRenderer.invoke('workspace:restore'),
   saveSettings: (settings: AppSettings): Promise<WorkspaceSnapshot> =>
@@ -34,7 +39,7 @@ const api: DeliveryCounterApi = {
   saveReport: (input: ReportInput): Promise<Report> => ipcRenderer.invoke('reports:save', input),
   deleteReport: (reportId: string): Promise<WorkspaceSnapshot> =>
     ipcRenderer.invoke('reports:delete', reportId),
-  importToReport: (input: ReportImportInput): Promise<ReportImport | null> =>
+  importToReport: (input: ReportImportInput): Promise<ReportImportSummary | null> =>
     ipcRenderer.invoke('reports:import', input),
   deleteReportImport: (importId: string): Promise<WorkspaceSnapshot> =>
     ipcRenderer.invoke('reports:deleteImport', importId),
